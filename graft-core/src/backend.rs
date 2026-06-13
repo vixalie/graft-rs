@@ -1,4 +1,5 @@
 use crate::param::Param;
+use crate::result::BuildResult;
 use crate::types::*;
 
 /// 方言抽象层——每种数据库实现此 trait。
@@ -40,67 +41,43 @@ pub trait Backend {
         true
     }
 
+    /// 后端是否支持指定的 JOIN 类型。
+    ///
+    /// 默认全部支持。SQLite 3.35.0 之前不支持 RIGHT/FULL JOIN，
+    /// 由 `SqliteBackend` override 拒绝。
+    fn supports_join_type(&self, _jt: JoinType) -> bool {
+        true
+    }
+
     /// ON CONFLICT / UPSERT 子句。
+    ///
+    /// 后端若不支持（如 MSSQL，需走 `MERGE`），返回
+    /// `Err(BuildError::UnsupportedFeature(...))`，由构建器在 build 阶段向上传播。
     fn on_conflict(
         &self,
         columns: &[String],
         action: &ConflictAction,
         _set: &[(String, Param)],
         _idx: &mut usize,
-    ) -> String {
+    ) -> BuildResult<String> {
         let cols = columns
             .iter()
             .map(|c| self.quote_ident(c))
             .collect::<Vec<_>>()
             .join(", ");
-        match action {
+        Ok(match action {
             ConflictAction::DoNothing => format!("ON CONFLICT ({cols}) DO NOTHING"),
             ConflictAction::DoUpdate { set_excluded, .. } => {
                 let updates: Vec<String> = set_excluded
                     .iter()
-                    .map(|c| {
-                        format!("{} = EXCLUDED.{}", self.quote_ident(c), self.quote_ident(c))
-                    })
+                    .map(|c| format!("{} = EXCLUDED.{}", self.quote_ident(c), self.quote_ident(c)))
                     .collect();
-                format!(
-                    "ON CONFLICT ({cols}) DO UPDATE SET {}",
-                    updates.join(", ")
-                )
+                format!("ON CONFLICT ({cols}) DO UPDATE SET {}", updates.join(", "))
             }
-        }
+        })
     }
 
-    /// 构建 CTE 字符串。
-    fn build_ctes(&self, ctes: &[CteNode], _idx: &mut usize) -> (String, Vec<Param>) {
-        let mut sql = String::new();
-        let params = vec![];
-
-        if ctes.is_empty() {
-            return (sql, params);
-        }
-
-        let recursive = ctes.iter().any(|c| c.recursive);
-        if recursive {
-            sql.push_str("WITH RECURSIVE ");
-        } else {
-            sql.push_str("WITH ");
-        }
-
-        for (i, cte) in ctes.iter().enumerate() {
-            if i > 0 {
-                sql.push_str(", ");
-            }
-            sql.push_str(&cte.name);
-            if let Some(ref cols) = cte.columns {
-                sql.push_str(&format!(" ({})", cols.join(", ")));
-            }
-            sql.push_str(" AS (");
-            // Body building is complex; this is a placeholder
-            // Real implementation would call build_select on the inner QueryBuilder
-            sql.push_str("...");
-            sql.push(')');
-        }
-
-        (sql, params)
-    }
+    // 注：CTE 构建 (`WITH ... AS (...)`) 在所有后端一致，
+    // 实际逻辑在 `QueryBuilder::build_ctes_inner` 中实现，
+    // 不再作为 Backend trait 方法暴露——避免误导性 stub。
 }

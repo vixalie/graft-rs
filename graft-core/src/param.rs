@@ -22,43 +22,63 @@ pub enum Param {
 // --- From impls ---
 
 impl From<&str> for Param {
-    fn from(s: &str) -> Self { Param::Text(s.to_owned()) }
+    fn from(s: &str) -> Self {
+        Param::Text(s.to_owned())
+    }
 }
 
 impl From<String> for Param {
-    fn from(s: String) -> Self { Param::Text(s) }
+    fn from(s: String) -> Self {
+        Param::Text(s)
+    }
 }
 
 impl From<&String> for Param {
-    fn from(s: &String) -> Self { Param::Text(s.clone()) }
+    fn from(s: &String) -> Self {
+        Param::Text(s.clone())
+    }
 }
 
 impl From<bool> for Param {
-    fn from(b: bool) -> Self { Param::Bool(b) }
+    fn from(b: bool) -> Self {
+        Param::Bool(b)
+    }
 }
 
 impl From<i8> for Param {
-    fn from(v: i8) -> Self { Param::I8(v) }
+    fn from(v: i8) -> Self {
+        Param::I8(v)
+    }
 }
 
 impl From<i16> for Param {
-    fn from(v: i16) -> Self { Param::I16(v) }
+    fn from(v: i16) -> Self {
+        Param::I16(v)
+    }
 }
 
 impl From<i32> for Param {
-    fn from(v: i32) -> Self { Param::I32(v) }
+    fn from(v: i32) -> Self {
+        Param::I32(v)
+    }
 }
 
 impl From<i64> for Param {
-    fn from(v: i64) -> Self { Param::I64(v) }
+    fn from(v: i64) -> Self {
+        Param::I64(v)
+    }
 }
 
 impl From<f32> for Param {
-    fn from(v: f32) -> Self { Param::F32(v) }
+    fn from(v: f32) -> Self {
+        Param::F32(v)
+    }
 }
 
 impl From<f64> for Param {
-    fn from(v: f64) -> Self { Param::F64(v) }
+    fn from(v: f64) -> Self {
+        Param::F64(v)
+    }
 }
 
 impl<T: Into<Param>> From<Option<T>> for Param {
@@ -72,12 +92,16 @@ impl<T: Into<Param>> From<Option<T>> for Param {
 
 #[cfg(feature = "chrono")]
 impl From<chrono::NaiveDateTime> for Param {
-    fn from(dt: chrono::NaiveDateTime) -> Self { Param::DateTime(dt) }
+    fn from(dt: chrono::NaiveDateTime) -> Self {
+        Param::DateTime(dt)
+    }
 }
 
 #[cfg(feature = "chrono")]
 impl From<chrono::DateTime<chrono::Utc>> for Param {
-    fn from(dt: chrono::DateTime<chrono::Utc>) -> Self { Param::DateTimeTz(dt) }
+    fn from(dt: chrono::DateTime<chrono::Utc>) -> Self {
+        Param::DateTimeTz(dt)
+    }
 }
 
 impl fmt::Display for Param {

@@ -1,5 +1,6 @@
 use crate::backend::Backend;
 use crate::param::Param;
+use crate::result::BuildResult;
 use crate::types::ConflictAction;
 
 /// MySQL 后端 — 使用 `?` 占位符和反引号引用标识符。
@@ -28,10 +29,10 @@ impl Backend for MysqlBackend {
         &self,
         _columns: &[String],
         action: &ConflictAction,
-        set: &[(String, Param)],
-        idx: &mut usize,
-    ) -> String {
-        match action {
+        _set: &[(String, Param)],
+        _idx: &mut usize,
+    ) -> BuildResult<String> {
+        Ok(match action {
             ConflictAction::DoNothing => "ON DUPLICATE KEY UPDATE id = id".to_string(),
             ConflictAction::DoUpdate { set_excluded, .. } => {
                 let updates: Vec<String> = set_excluded
@@ -40,7 +41,6 @@ impl Backend for MysqlBackend {
                     .collect();
                 format!("ON DUPLICATE KEY UPDATE {}", updates.join(", "))
             }
-            _ => String::new(),
-        }
+        })
     }
 }

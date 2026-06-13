@@ -3,11 +3,11 @@
 //! 多后端动态 SQL 查询构建器的核心类型和 Backend trait。
 //! 所有用户输入通过 `Param` 枚举，杜绝 SQL 注入。
 
-pub mod param;
-pub mod types;
-pub mod builder;
 pub mod backend;
+pub mod builder;
+pub mod param;
 pub mod result;
+pub mod types;
 
 #[cfg(feature = "executor")]
 pub mod exec;
@@ -17,11 +17,11 @@ pub mod backends;
 
 // ── 常用类型的 re-export ──
 
-pub use param::Param;
-pub use types::*;
-pub use builder::{QueryBuilder, WhereAdder, GroupBuilder, JoinAdder, OnAdder, HasWhere, HasJoins};
 pub use backend::Backend;
-pub use result::{QueryResult, BuildError, BuildResult};
+pub use builder::{GroupBuilder, HasJoins, HasWhere, JoinAdder, OnAdder, QueryBuilder, WhereAdder};
+pub use param::Param;
+pub use result::{BuildError, BuildResult, QueryResult};
+pub use types::*;
 
 #[cfg(feature = "executor")]
 pub use exec::Executor;

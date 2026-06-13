@@ -4,7 +4,11 @@ use crate::param::Param;
 #[async_trait::async_trait]
 pub trait Executor {
     /// 执行不返回行的 SQL（INSERT/UPDATE/DELETE）。
-    async fn execute(&mut self, sql: &str, params: &[Param]) -> Result<u64, crate::result::BuildError>;
+    async fn execute(
+        &mut self,
+        sql: &str,
+        params: &[Param],
+    ) -> Result<u64, crate::result::BuildError>;
 
     /// 查询单行。
     async fn query_row(

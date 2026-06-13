@@ -26,12 +26,14 @@
 //! ```rust
 //! use graft::*;
 //!
-//! let (sql, params) = QueryBuilder::select(&["id", "name"])
+//! let result = QueryBuilder::select(&["id", "name"])
 //!     .from("users")
 //!     .and_where("status").eq("active")
 //!     .and_where("age").gte(18)
 //!     .build(&backends::postgres::PostgresBackend)
 //!     .unwrap();
+//! let sql = result.sql;
+//! let params = result.params;
 //!
 //! // SELECT "id", "name" FROM "users" WHERE "status" = $1 AND "age" >= $2
 //! // params: ["active", 18]
@@ -44,26 +46,26 @@ pub use graft_core::*;
 
 /// 后端实现。
 pub mod backends {
-    #[cfg(feature = "postgresql")]
-    pub use graft_core::backends::postgres;
-    #[cfg(feature = "mysql")]
-    pub use graft_core::backends::mysql;
     #[cfg(feature = "mariadb")]
     pub use graft_core::backends::mariadb;
     #[cfg(feature = "mssql")]
     pub use graft_core::backends::mssql;
+    #[cfg(feature = "mysql")]
+    pub use graft_core::backends::mysql;
+    #[cfg(feature = "postgresql")]
+    pub use graft_core::backends::postgres;
     #[cfg(feature = "sqlite")]
     pub use graft_core::backends::sqlite;
 
     // Re-export backend types at the backends module level
-    #[cfg(feature = "postgresql")]
-    pub use postgres::PostgresBackend;
-    #[cfg(feature = "mysql")]
-    pub use mysql::MysqlBackend;
     #[cfg(feature = "mariadb")]
     pub use mariadb::MariaDbBackend;
     #[cfg(feature = "mssql")]
     pub use mssql::MssqlBackend;
+    #[cfg(feature = "mysql")]
+    pub use mysql::MysqlBackend;
+    #[cfg(feature = "postgresql")]
+    pub use postgres::PostgresBackend;
     #[cfg(feature = "sqlite")]
     pub use sqlite::SqliteBackend;
 }

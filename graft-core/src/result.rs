@@ -54,9 +54,13 @@ impl std::fmt::Display for BuildError {
         match self {
             BuildError::EmptyInClause => write!(f, "IN clause must not be empty"),
             BuildError::NoSetClauses => write!(f, "UPDATE requires at least one SET clause"),
-            BuildError::UnsupportedJoinType(t) => write!(f, "backend does not support JOIN type: {t}"),
+            BuildError::UnsupportedJoinType(t) => {
+                write!(f, "backend does not support JOIN type: {t}")
+            }
             BuildError::UnsupportedFeature(feat) => write!(f, "backend does not support: {feat}"),
-            BuildError::ModeMismatch(m) => write!(f, "operation not valid for current query mode: {m}"),
+            BuildError::ModeMismatch(m) => {
+                write!(f, "operation not valid for current query mode: {m}")
+            }
         }
     }
 }

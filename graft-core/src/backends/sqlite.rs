@@ -1,6 +1,7 @@
 use crate::backend::Backend;
 use crate::param::Param;
-use crate::types::ConflictAction;
+use crate::result::BuildResult;
+use crate::types::{ConflictAction, JoinType};
 
 /// SQLite 后端 — 使用 `?` 占位符和双引号引用标识符。
 /// 不支持 RETURNING（需要 `last_insert_rowid()` 降级）。
@@ -26,31 +27,32 @@ impl Backend for SqliteBackend {
         false
     }
 
+    /// SQLite 3.35.0 之前不支持 RIGHT / FULL JOIN，当前按不支持处理。
+    fn supports_join_type(&self, jt: JoinType) -> bool {
+        !matches!(jt, JoinType::Right | JoinType::Full)
+    }
+
     fn on_conflict(
         &self,
         columns: &[String],
         action: &ConflictAction,
-        set: &[(String, Param)],
+        _set: &[(String, Param)],
         _idx: &mut usize,
-    ) -> String {
+    ) -> BuildResult<String> {
         let cols = columns
             .iter()
             .map(|c| format!("\"{c}\""))
             .collect::<Vec<_>>()
             .join(", ");
-        match action {
+        Ok(match action {
             ConflictAction::DoNothing => format!("ON CONFLICT ({cols}) DO NOTHING"),
             ConflictAction::DoUpdate { set_excluded, .. } => {
                 let updates: Vec<String> = set_excluded
                     .iter()
                     .map(|c| format!("\"{c}\" = excluded.\"{c}\""))
                     .collect();
-                format!(
-                    "ON CONFLICT ({cols}) DO UPDATE SET {}",
-                    updates.join(", ")
-                )
+                format!("ON CONFLICT ({cols}) DO UPDATE SET {}", updates.join(", "))
             }
-            _ => String::new(),
-        }
+        })
     }
 }

@@ -1,5 +1,6 @@
 use crate::backend::Backend;
 use crate::param::Param;
+use crate::result::BuildResult;
 use crate::types::ConflictAction;
 
 /// MariaDB 后端 — 与 MySQL 基本一致，需要时可独立调优。
@@ -27,10 +28,10 @@ impl Backend for MariaDbBackend {
         &self,
         _columns: &[String],
         action: &ConflictAction,
-        set: &[(String, Param)],
-        idx: &mut usize,
-    ) -> String {
-        match action {
+        _set: &[(String, Param)],
+        _idx: &mut usize,
+    ) -> BuildResult<String> {
+        Ok(match action {
             ConflictAction::DoNothing => "ON DUPLICATE KEY UPDATE id = id".to_string(),
             ConflictAction::DoUpdate { set_excluded, .. } => {
                 let updates: Vec<String> = set_excluded
@@ -39,7 +40,6 @@ impl Backend for MariaDbBackend {
                     .collect();
                 format!("ON DUPLICATE KEY UPDATE {}", updates.join(", "))
             }
-            _ => String::new(),
-        }
+        })
     }
 }

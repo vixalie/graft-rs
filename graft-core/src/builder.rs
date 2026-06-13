@@ -1,7 +1,7 @@
+use crate::Backend;
 use crate::param::Param;
 use crate::result::{BuildError, BuildResult, QueryResult};
 use crate::types::*;
-use crate::Backend;
 
 // ============================================================
 // QueryBuilder — 核心查询构建器
@@ -102,7 +102,9 @@ impl QueryBuilder {
     /// 创建 SELECT 查询。
     ///
     /// ```rust
-    /// QueryBuilder::select(&["id", "name"]).from("users");
+    /// use graft_core::QueryBuilder;
+    /// let qb = QueryBuilder::select(&["id", "name"]).from("users");
+    /// # let _ = qb;
     /// ```
     pub fn select(columns: &[&str]) -> Self {
         let mut b = Self::new(QueryMode::Select);
@@ -154,7 +156,8 @@ impl QueryBuilder {
     /// 带别名的 FROM。
     /// `from("users", "u")` → `FROM users AS u`
     pub fn from_as(mut self, table: &str, alias: &str) -> Self {
-        self.from.push(TableRef::TableAs(table.to_string(), alias.to_string()));
+        self.from
+            .push(TableRef::TableAs(table.to_string(), alias.to_string()));
         self
     }
 
@@ -237,8 +240,10 @@ impl QueryBuilder {
     pub fn and_group(mut self, f: impl FnOnce(GroupBuilder) -> GroupBuilder) -> Self {
         let group = GroupBuilder::new(LogicOp::And);
         let group = f(group);
-        self.where_list
-            .push(WhereGroup::new(LogicOp::And, WhereKind::Group(group.groups)));
+        self.where_list.push(WhereGroup::new(
+            LogicOp::And,
+            WhereKind::Group(group.groups),
+        ));
         self
     }
 
@@ -269,7 +274,10 @@ impl QueryBuilder {
             conditions: vec![],
         });
         let join_idx = self.joins.len() - 1;
-        JoinAdder { target: self, join_idx }
+        JoinAdder {
+            target: self,
+            join_idx,
+        }
     }
 
     /// LEFT JOIN table AS alias。
@@ -281,7 +289,10 @@ impl QueryBuilder {
             conditions: vec![],
         });
         let join_idx = self.joins.len() - 1;
-        JoinAdder { target: self, join_idx }
+        JoinAdder {
+            target: self,
+            join_idx,
+        }
     }
 
     /// RIGHT JOIN table AS alias。
@@ -293,7 +304,10 @@ impl QueryBuilder {
             conditions: vec![],
         });
         let join_idx = self.joins.len() - 1;
-        JoinAdder { target: self, join_idx }
+        JoinAdder {
+            target: self,
+            join_idx,
+        }
     }
 
     /// FULL OUTER JOIN table AS alias。
@@ -305,7 +319,10 @@ impl QueryBuilder {
             conditions: vec![],
         });
         let join_idx = self.joins.len() - 1;
-        JoinAdder { target: self, join_idx }
+        JoinAdder {
+            target: self,
+            join_idx,
+        }
     }
 
     /// CROSS JOIN (无 ON 条件)。
@@ -328,7 +345,10 @@ impl QueryBuilder {
             conditions: vec![],
         });
         let join_idx = self.joins.len() - 1;
-        JoinAdder { target: self, join_idx }
+        JoinAdder {
+            target: self,
+            join_idx,
+        }
     }
 
     /// CTE JOIN：`INNER JOIN cte_name AS alias`
@@ -340,7 +360,10 @@ impl QueryBuilder {
             conditions: vec![],
         });
         let join_idx = self.joins.len() - 1;
-        JoinAdder { target: self, join_idx }
+        JoinAdder {
+            target: self,
+            join_idx,
+        }
     }
 
     // ═══════════════════════════════════════════
@@ -447,10 +470,8 @@ impl QueryBuilder {
 
     /// UPDATE SET。
     pub fn update_set(mut self, column: &str, value: impl Into<Param>) -> Self {
-        self.set_list.push(SetClause::new(
-            column,
-            SetValue::Param(value.into()),
-        ));
+        self.set_list
+            .push(SetClause::new(column, SetValue::Param(value.into())));
         self
     }
 
@@ -464,8 +485,10 @@ impl QueryBuilder {
 
     /// SET 子查询。
     pub fn set_subquery(mut self, column: &str, subquery: QueryBuilder) -> Self {
-        self.set_list
-            .push(SetClause::new(column, SetValue::Subquery(Box::new(subquery))));
+        self.set_list.push(SetClause::new(
+            column,
+            SetValue::Subquery(Box::new(subquery)),
+        ));
         self
     }
 
@@ -475,10 +498,8 @@ impl QueryBuilder {
 
     /// 带 CTE：`WITH name AS (subquery)`。
     pub fn with_cte(mut self, name: &str, subquery: QueryBuilder) -> Self {
-        self.ctes.push(CteNode::new(
-            name,
-            CteBody::Query(Box::new(subquery)),
-        ));
+        self.ctes
+            .push(CteNode::new(name, CteBody::Query(Box::new(subquery))));
         self
     }
 
@@ -553,6 +574,9 @@ impl QueryBuilder {
         idx: &mut usize,
     ) -> BuildResult<(String, Vec<Param>)> {
         use std::fmt::Write;
+        self.validate_where_list(&self.where_list)?;
+        self.validate_where_list(&self.having)?;
+        self.validate_joins(backend)?;
         let mut sql = String::new();
         let mut all_params = vec![];
 
@@ -714,12 +738,12 @@ impl QueryBuilder {
         // RETURNING
         let mut sql = format!("INSERT INTO {table}{cols} VALUES {values_str}");
 
-        if let Some(ref returning_cols) = self.insert_returning {
-            if backend.supports_returning() {
-                write!(sql, " {}", backend.returning(returning_cols)).unwrap();
-            }
-            // If backend doesn't support RETURNING, add separate statement (handled at executor level)
+        if let Some(ref returning_cols) = self.insert_returning
+            && backend.supports_returning()
+        {
+            write!(sql, " {}", backend.returning(returning_cols)).unwrap();
         }
+        // If backend doesn't support RETURNING, add separate statement (handled at executor level)
 
         // ON CONFLICT
         if let Some(ref conflict) = self.insert_conflict {
@@ -727,12 +751,8 @@ impl QueryBuilder {
                 ConflictAction::DoNothing => vec![],
                 ConflictAction::DoUpdate { set, .. } => set.clone(),
             };
-            let conflict_sql = backend.on_conflict(
-                &conflict.columns,
-                &conflict.action,
-                &set_for_conflict,
-                idx,
-            );
+            let conflict_sql =
+                backend.on_conflict(&conflict.columns, &conflict.action, &set_for_conflict, idx)?;
             write!(sql, " {conflict_sql}").unwrap();
         }
 
@@ -748,6 +768,7 @@ impl QueryBuilder {
         if self.set_list.is_empty() {
             return Err(BuildError::NoSetClauses);
         }
+        self.validate_where_list(&self.where_list)?;
 
         let table = self
             .update_table
@@ -809,6 +830,7 @@ impl QueryBuilder {
             .delete_table
             .as_deref()
             .ok_or_else(|| BuildError::ModeMismatch("DELETE requires a table".to_string()))?;
+        self.validate_where_list(&self.where_list)?;
 
         let mut sql = String::new();
         let mut all_params = vec![];
@@ -822,10 +844,10 @@ impl QueryBuilder {
         }
 
         // RETURNING
-        if let Some(ref returning_cols) = self.delete_returning {
-            if backend.supports_returning() {
-                write!(sql, " {}", backend.returning(returning_cols)).unwrap();
-            }
+        if let Some(ref returning_cols) = self.delete_returning
+            && backend.supports_returning()
+        {
+            write!(sql, " {}", backend.returning(returning_cols)).unwrap();
         }
 
         Ok((sql, all_params))
@@ -866,6 +888,39 @@ impl QueryBuilder {
         }
     }
 
+    /// 递归校验 WHERE 条件组，提前阻断非法 SQL。
+    ///
+    /// 当前规则：
+    /// - `IN` 子句至少含一个非空表达式
+    fn validate_where_list(&self, groups: &[WhereGroup]) -> BuildResult<()> {
+        for group in groups {
+            match &group.kind {
+                WhereKind::In { values, .. } => {
+                    if values.is_empty() || values.iter().all(|v| v.is_empty()) {
+                        return Err(BuildError::EmptyInClause);
+                    }
+                }
+                WhereKind::Group(inner) => {
+                    self.validate_where_list(inner)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// 校验所有 JOIN 是否被当前 backend 支持。
+    fn validate_joins<B: Backend>(&self, backend: &B) -> BuildResult<()> {
+        for join in &self.joins {
+            if !backend.supports_join_type(join.join_type) {
+                return Err(BuildError::UnsupportedJoinType(
+                    join.join_type.sql().to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn build_where_list<B: Backend>(
         &self,
         groups: &[WhereGroup],
@@ -892,7 +947,8 @@ impl QueryBuilder {
                             sql.push_str(col); // column ref, not quoted
                         }
                         Expr::Subquery(sub) => {
-                            if let Ok((sub_sql, mut sub_params)) = sub.build_select_query(backend, idx)
+                            if let Ok((sub_sql, mut sub_params)) =
+                                sub.build_select_query(backend, idx)
                             {
                                 write!(sql, "({sub_sql})").unwrap();
                                 params.append(&mut sub_params);
@@ -909,13 +965,7 @@ impl QueryBuilder {
                     negated,
                 } => {
                     let not = if *negated { " NOT" } else { "" };
-                    write!(
-                        sql,
-                        "{}{} IN (",
-                        backend.quote_ident(column),
-                        not
-                    )
-                    .unwrap();
+                    write!(sql, "{}{} IN (", backend.quote_ident(column), not).unwrap();
                     let flat_values: Vec<&Expr> = values.iter().flatten().collect();
                     for (j, expr) in flat_values.iter().enumerate() {
                         if j > 0 {
@@ -1072,7 +1122,9 @@ impl QueryBuilder {
                     params.push(value.clone());
                     *idx += 1;
                 }
-                OnCondition::Group { conditions: sub, .. } => {
+                OnCondition::Group {
+                    conditions: sub, ..
+                } => {
                     sql.push('(');
                     self.build_on_conditions(sub, backend, idx, sql, params);
                     sql.push(')');
@@ -1086,11 +1138,7 @@ impl QueryBuilder {
         }
     }
 
-    fn build_ctes_inner<B: Backend>(
-        &self,
-        backend: &B,
-        idx: &mut usize,
-    ) -> (String, Vec<Param>) {
+    fn build_ctes_inner<B: Backend>(&self, backend: &B, idx: &mut usize) -> (String, Vec<Param>) {
         use std::fmt::Write;
         let mut sql = String::new();
         let mut all_params = vec![];
@@ -1159,7 +1207,11 @@ pub struct WhereAdder<T> {
 
 impl<T: HasWhere> WhereAdder<T> {
     pub fn eq(self, val: impl Into<Param>) -> T {
-        let Self { mut target, logic, column } = self;
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
         let kind = WhereKind::Column {
             column,
             op: CmpOp::Eq,
@@ -1169,7 +1221,11 @@ impl<T: HasWhere> WhereAdder<T> {
     }
 
     pub fn ne(self, val: impl Into<Param>) -> T {
-        let Self { mut target, logic, column } = self;
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
         let kind = WhereKind::Column {
             column,
             op: CmpOp::Ne,
@@ -1179,7 +1235,11 @@ impl<T: HasWhere> WhereAdder<T> {
     }
 
     pub fn gt(self, val: impl Into<Param>) -> T {
-        let Self { mut target, logic, column } = self;
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
         let kind = WhereKind::Column {
             column,
             op: CmpOp::Gt,
@@ -1189,7 +1249,11 @@ impl<T: HasWhere> WhereAdder<T> {
     }
 
     pub fn gte(self, val: impl Into<Param>) -> T {
-        let Self { mut target, logic, column } = self;
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
         let kind = WhereKind::Column {
             column,
             op: CmpOp::Gte,
@@ -1199,7 +1263,11 @@ impl<T: HasWhere> WhereAdder<T> {
     }
 
     pub fn lt(self, val: impl Into<Param>) -> T {
-        let Self { mut target, logic, column } = self;
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
         let kind = WhereKind::Column {
             column,
             op: CmpOp::Lt,
@@ -1209,7 +1277,11 @@ impl<T: HasWhere> WhereAdder<T> {
     }
 
     pub fn lte(self, val: impl Into<Param>) -> T {
-        let Self { mut target, logic, column } = self;
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
         let kind = WhereKind::Column {
             column,
             op: CmpOp::Lte,
@@ -1218,16 +1290,17 @@ impl<T: HasWhere> WhereAdder<T> {
         target.add_where(logic, kind)
     }
 
-    /// LIKE 条件。
+    /// LIKE 条件。值始终参数化，杜绝 SQL 注入。
     pub fn like(self, val: impl Into<Param>) -> T {
-        let Self { mut target, logic, column } = self;
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
         let kind = WhereKind::Column {
             column,
-            op: CmpOp::Eq, // LIKE is a special operator
-            value: Expr::RawExpr(format!("LIKE {}", match val.into() {
-                Param::Text(s) => format!("'{}'", s.replace('\'', "''")),
-                _ => String::new(),
-            })),
+            op: CmpOp::Like,
+            value: Expr::Value(val.into()),
         };
         target.add_where(logic, kind)
     }
@@ -1250,7 +1323,11 @@ impl<T: HasWhere> WhereAdder<T> {
 
     /// IN 条件。
     pub fn in_(self, vals: impl IntoIterator<Item: Into<Param>>) -> T {
-        let Self { mut target, logic, column } = self;
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
         let expr_vals: Vec<Vec<Expr>> = vals
             .into_iter()
             .map(|v| vec![Expr::Value(v.into())])
@@ -1273,7 +1350,11 @@ impl<T: HasWhere> WhereAdder<T> {
 
     /// IN 子查询。
     pub fn in_subquery(self, subquery: QueryBuilder) -> T {
-        let Self { mut target, logic, column } = self;
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
         let kind = WhereKind::In {
             column,
             values: vec![vec![Expr::Subquery(Box::new(subquery))]],
@@ -1284,21 +1365,39 @@ impl<T: HasWhere> WhereAdder<T> {
 
     /// IS NULL。
     pub fn is_null(self) -> T {
-        let Self { mut target, logic, column } = self;
-        let kind = WhereKind::IsNull { column, negated: false };
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
+        let kind = WhereKind::IsNull {
+            column,
+            negated: false,
+        };
         target.add_where(logic, kind)
     }
 
     /// IS NOT NULL。
     pub fn is_not_null(self) -> T {
-        let Self { mut target, logic, column } = self;
-        let kind = WhereKind::IsNull { column, negated: true };
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
+        let kind = WhereKind::IsNull {
+            column,
+            negated: true,
+        };
         target.add_where(logic, kind)
     }
 
     /// BETWEEN。
     pub fn between(self, low: impl Into<Param>, high: impl Into<Param>) -> T {
-        let Self { mut target, logic, column } = self;
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
         let kind = WhereKind::Between {
             column,
             low: Expr::Value(low.into()),
@@ -1309,7 +1408,11 @@ impl<T: HasWhere> WhereAdder<T> {
 
     /// 列 = 列（关联引用）。
     pub fn eq_col(self, col: &str) -> T {
-        let Self { mut target, logic, column } = self;
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
         let kind = WhereKind::Column {
             column,
             op: CmpOp::Eq,
@@ -1376,8 +1479,10 @@ impl GroupBuilder {
     pub fn and_group(mut self, f: impl FnOnce(GroupBuilder) -> GroupBuilder) -> Self {
         let inner = GroupBuilder::new(LogicOp::And);
         let inner = f(inner);
-        self.groups
-            .push(WhereGroup::new(LogicOp::And, WhereKind::Group(inner.groups)));
+        self.groups.push(WhereGroup::new(
+            LogicOp::And,
+            WhereKind::Group(inner.groups),
+        ));
         self
     }
 
@@ -1398,8 +1503,10 @@ impl HasWhere for GroupBuilder {
     }
 
     fn add_where_raw(&mut self, _logic: LogicOp, sql: &str, params: Vec<Param>) -> Self {
-        self.groups
-            .push(WhereGroup::new(self.logic, WhereKind::Raw(sql.to_string(), params)));
+        self.groups.push(WhereGroup::new(
+            self.logic,
+            WhereKind::Raw(sql.to_string(), params),
+        ));
         std::mem::take(self)
     }
 
@@ -1426,8 +1533,10 @@ impl HasWhere for QueryBuilder {
     }
 
     fn add_where_raw(&mut self, _logic: LogicOp, sql: &str, params: Vec<Param>) -> Self {
-        self.where_list
-            .push(WhereGroup::new(_logic, WhereKind::Raw(sql.to_string(), params)));
+        self.where_list.push(WhereGroup::new(
+            _logic,
+            WhereKind::Raw(sql.to_string(), params),
+        ));
         std::mem::take(self)
     }
 
@@ -1450,11 +1559,13 @@ pub struct JoinAdder<T> {
 impl<T: HasJoins> JoinAdder<T> {
     /// 主 ON 条件：`left_col = right_col`。
     pub fn on(mut self, left: &str, right: &str) -> T {
-        self.target
-            .add_join_cond(self.join_idx, OnCondition::Eq {
+        self.target.add_join_cond(
+            self.join_idx,
+            OnCondition::Eq {
                 left: left.to_string(),
                 right: right.to_string(),
-            });
+            },
+        );
         self.target
     }
 
@@ -1464,7 +1575,6 @@ impl<T: HasJoins> JoinAdder<T> {
             target: self.target,
             join_idx: self.join_idx,
             column: column.to_string(),
-            logic: LogicOp::And,
         }
     }
 
@@ -1474,37 +1584,32 @@ impl<T: HasJoins> JoinAdder<T> {
             target: self.target,
             join_idx: self.join_idx,
             column: column.to_string(),
-            logic: LogicOp::Or,
         }
     }
 
     /// AND 子分组。
-    pub fn and_group(
-        mut self,
-        f: impl FnOnce(OnGroupBuilder) -> OnGroupBuilder,
-    ) -> T {
-        let group = OnGroupBuilder::new(LogicOp::And);
-        let group = f(group);
-        self.target
-            .add_join_cond(self.join_idx, OnCondition::Group {
+    pub fn and_group(mut self, f: impl FnOnce(OnGroupBuilder) -> OnGroupBuilder) -> T {
+        let group = f(OnGroupBuilder::new());
+        self.target.add_join_cond(
+            self.join_idx,
+            OnCondition::Group {
                 logic: LogicOp::And,
                 conditions: group.conditions,
-            });
+            },
+        );
         self.target
     }
 
     /// OR 子分组。
-    pub fn or_group(
-        mut self,
-        f: impl FnOnce(OnGroupBuilder) -> OnGroupBuilder,
-    ) -> T {
-        let group = OnGroupBuilder::new(LogicOp::Or);
-        let group = f(group);
-        self.target
-            .add_join_cond(self.join_idx, OnCondition::Group {
+    pub fn or_group(mut self, f: impl FnOnce(OnGroupBuilder) -> OnGroupBuilder) -> T {
+        let group = f(OnGroupBuilder::new());
+        self.target.add_join_cond(
+            self.join_idx,
+            OnCondition::Group {
                 logic: LogicOp::Or,
                 conditions: group.conditions,
-            });
+            },
+        );
         self.target
     }
 }
@@ -1518,7 +1623,6 @@ pub struct OnAdder<T> {
     target: T,
     join_idx: usize,
     column: String,
-    logic: LogicOp,
 }
 
 impl<T: HasJoins> OnAdder<T> {
@@ -1547,12 +1651,14 @@ impl<T: HasJoins> OnAdder<T> {
     }
 
     fn add_on_cond(mut self, op: CmpOp, value: Param) -> T {
-        self.target
-            .add_join_cond(self.join_idx, OnCondition::EqValue {
+        self.target.add_join_cond(
+            self.join_idx,
+            OnCondition::EqValue {
                 column: self.column.clone(),
                 op,
                 value,
-            });
+            },
+        );
         self.target
     }
 }
@@ -1563,41 +1669,39 @@ impl<T: HasJoins> OnAdder<T> {
 
 pub struct OnGroupBuilder {
     pub(crate) conditions: Vec<OnCondition>,
-    pub(crate) logic: LogicOp,
 }
 
 impl OnGroupBuilder {
-    pub fn new(logic: LogicOp) -> Self {
-        Self {
-            conditions: vec![],
-            logic,
-        }
+    pub fn new() -> Self {
+        Self { conditions: vec![] }
     }
 
     pub fn or_on(self, column: &str) -> OnAdderForGroup {
         OnAdderForGroup {
             target: self,
             column: column.to_string(),
-            logic: LogicOp::Or,
         }
+    }
+}
+
+impl Default for OnGroupBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 pub struct OnAdderForGroup {
     target: OnGroupBuilder,
     column: String,
-    logic: LogicOp,
 }
 
 impl OnAdderForGroup {
     pub fn eq(mut self, val: impl Into<Param>) -> OnGroupBuilder {
-        self.target
-            .conditions
-            .push(OnCondition::EqValue {
-                column: self.column,
-                op: CmpOp::Eq,
-                value: val.into(),
-            });
+        self.target.conditions.push(OnCondition::EqValue {
+            column: self.column,
+            op: CmpOp::Eq,
+            value: val.into(),
+        });
         self.target
     }
 }
@@ -1670,5 +1774,200 @@ impl Default for QueryBuilder {
 impl Default for GroupBuilder {
     fn default() -> Self {
         Self::new(LogicOp::And)
+    }
+}
+
+// ============================================================
+// Tests
+// ============================================================
+
+#[cfg(test)]
+mod tests {
+    //! Phase 1 修复验证测试。
+    //!
+    //! 后续阶段的测试将基于稳定 API 编写，参见 `roadmap.md` Phase 6。
+    use super::*;
+
+    #[cfg(feature = "postgresql")]
+    use crate::backends::postgres::PostgresBackend;
+
+    /// 验证 LIKE 条件将值参数化（不再拼入 SQL 字符串）。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn like_uses_parameterized_placeholder() {
+        // 含 SQL 注入尝试的 LIKE 值
+        let payload = "alice%' OR '1'='1";
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .and_where("name")
+            .like(payload)
+            .build(&PostgresBackend)
+            .unwrap();
+
+        // SQL 字符串里只含占位符，不含 payload
+        assert!(
+            !result.sql.contains(payload),
+            "LIKE payload leaked into SQL: {}",
+            result.sql
+        );
+        assert!(
+            result.sql.contains("$1"),
+            "expected $1 placeholder: {}",
+            result.sql
+        );
+        assert!(
+            result.sql.contains("LIKE"),
+            "expected LIKE keyword: {}",
+            result.sql
+        );
+
+        // 参数列表里包含原值
+        assert_eq!(result.params, vec![Param::Text(payload.to_string())]);
+    }
+
+    /// 验证 like_opt(None) 跳过条件，值不影响参数。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn like_opt_none_skips_condition() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .and_where("name")
+            .like_opt(Option::<&str>::None)
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            !result.sql.contains("LIKE"),
+            "like_opt(None) should not emit LIKE"
+        );
+        assert!(result.params.is_empty());
+    }
+
+    /// 验证空 `in_([])` 在 build 时返回 `EmptyInClause`。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn in_clause_with_empty_iter_returns_error() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .and_where("id")
+            .in_(std::iter::empty::<i32>())
+            .build(&PostgresBackend);
+
+        assert!(matches!(result, Err(BuildError::EmptyInClause)));
+    }
+
+    /// 验证 `in_opt(None)` 不触发空 IN（条件被跳过）。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn in_opt_none_skips_condition() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .and_where("id")
+            .in_opt(Option::<Vec<i32>>::None)
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            !result.sql.contains("IN"),
+            "in_opt(None) should not emit IN"
+        );
+        assert!(result.params.is_empty());
+    }
+
+    /// 验证嵌套在 `and_group` 内的空 IN 也能被递归捕获。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn nested_empty_in_clause_returns_error() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .and_group(|g| g.and_where("id").in_(std::iter::empty::<i32>()))
+            .build(&PostgresBackend);
+
+        assert!(matches!(result, Err(BuildError::EmptyInClause)));
+    }
+
+    /// 验证 MSSQL UPSERT 在 build 时返回 `UnsupportedFeature`（不静默生成非法 SQL）。
+    #[cfg(feature = "mssql")]
+    #[test]
+    fn mssql_upsert_returns_unsupported_error() {
+        use crate::backends::mssql::MssqlBackend;
+
+        let result = QueryBuilder::insert_into("users")
+            .set("id", 1)
+            .set("name", "alice")
+            .on_conflict_do_nothing(&["id"])
+            .build(&MssqlBackend);
+
+        match result {
+            Err(BuildError::UnsupportedFeature(msg)) => {
+                assert!(msg.contains("MSSQL"), "unexpected message: {msg}");
+            }
+            other => panic!("expected UnsupportedFeature, got: {other:?}"),
+        }
+    }
+
+    /// 验证 Postgres UPSERT (DO NOTHING) 仍正常工作。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn postgres_upsert_do_nothing_still_works() {
+        let result = QueryBuilder::insert_into("users")
+            .set("id", 1)
+            .set("name", "alice")
+            .on_conflict_do_nothing(&["id"])
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(result.sql.contains("ON CONFLICT (\"id\") DO NOTHING"));
+    }
+
+    /// 验证 SQLite 拒绝 RIGHT JOIN。
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn sqlite_rejects_right_join() {
+        use crate::backends::sqlite::SqliteBackend;
+
+        let result = QueryBuilder::select(&["a.id"])
+            .from("a")
+            .right_join("b", "b")
+            .on("a.id", "b.a_id")
+            .build(&SqliteBackend);
+
+        match result {
+            Err(BuildError::UnsupportedJoinType(t)) => {
+                assert!(t.contains("RIGHT"), "unexpected join type: {t}");
+            }
+            other => panic!("expected UnsupportedJoinType, got: {other:?}"),
+        }
+    }
+
+    /// 验证 SQLite 拒绝 FULL JOIN。
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn sqlite_rejects_full_join() {
+        use crate::backends::sqlite::SqliteBackend;
+
+        let result = QueryBuilder::select(&["a.id"])
+            .from("a")
+            .full_join("b", "b")
+            .on("a.id", "b.a_id")
+            .build(&SqliteBackend);
+
+        assert!(matches!(result, Err(BuildError::UnsupportedJoinType(_))));
+    }
+
+    /// 验证 SQLite 接受 INNER JOIN（默认应支持）。
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn sqlite_accepts_inner_join() {
+        use crate::backends::sqlite::SqliteBackend;
+
+        let result = QueryBuilder::select(&["a.id"])
+            .from("a")
+            .join("b", "b")
+            .on("a.id", "b.a_id")
+            .build(&SqliteBackend)
+            .unwrap();
+
+        assert!(result.sql.contains("INNER JOIN"));
     }
 }

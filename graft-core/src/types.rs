@@ -29,6 +29,8 @@ pub enum CmpOp {
     Gte,
     Lt,
     Lte,
+    /// SQL `LIKE` 运算符——值仍由 `Expr::Value` 承载以保证参数化。
+    Like,
 }
 
 impl CmpOp {
@@ -40,6 +42,7 @@ impl CmpOp {
             CmpOp::Gte => ">=",
             CmpOp::Lt => "<",
             CmpOp::Lte => "<=",
+            CmpOp::Like => "LIKE",
         }
     }
 }
@@ -145,15 +148,27 @@ impl TableRef {
 }
 
 impl From<&str> for TableRef {
-    fn from(s: &str) -> Self { TableRef::Table(s.to_owned()) }
+    fn from(s: &str) -> Self {
+        TableRef::Table(s.to_owned())
+    }
 }
 
 /// ON 条件。
 #[derive(Debug, Clone)]
 pub enum OnCondition {
-    Eq { left: String, right: String },
-    EqValue { column: String, op: CmpOp, value: Param },
-    Group { logic: LogicOp, conditions: Vec<OnCondition> },
+    Eq {
+        left: String,
+        right: String,
+    },
+    EqValue {
+        column: String,
+        op: CmpOp,
+        value: Param,
+    },
+    Group {
+        logic: LogicOp,
+        conditions: Vec<OnCondition>,
+    },
     Raw(String, Vec<Param>),
 }
 
@@ -297,6 +312,9 @@ pub struct SetClause {
 
 impl SetClause {
     pub fn new(column: impl Into<String>, value: SetValue) -> Self {
-        Self { column: column.into(), value }
+        Self {
+            column: column.into(),
+            value,
+        }
     }
 }

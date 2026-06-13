@@ -1,5 +1,6 @@
 use crate::backend::Backend;
 use crate::param::Param;
+use crate::result::{BuildError, BuildResult};
 use crate::types::ConflictAction;
 
 /// MSSQL 后端 — 使用 `@P1, @P2` 占位符和方括号引用标识符。
@@ -53,9 +54,11 @@ impl Backend for MssqlBackend {
         _action: &ConflictAction,
         _set: &[(String, Param)],
         _idx: &mut usize,
-    ) -> String {
-        // MSSQL 用 MERGE 实现 UPSERT，需单独方法
-        // 当前返回标记，由调用方处理
-        String::new()
+    ) -> BuildResult<String> {
+        // MSSQL 的 UPSERT 需改写整个 INSERT 为 `MERGE` 语句，
+        // 复杂度较高，Phase 1 暂不支持。返回错误比生成非法 SQL 更安全。
+        Err(BuildError::UnsupportedFeature(
+            "MSSQL UPSERT (use MERGE explicitly — not yet implemented)".to_string(),
+        ))
     }
 }
