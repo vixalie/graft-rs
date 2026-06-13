@@ -2,9 +2,7 @@
 
 轻量多后端动态 SQL 查询构建器，Rust 实现。
 
-> **命名约定**：仓库 / 项目名为 `graft-rs`，crates.io 上的 crate 名为 `graft`（保持简洁，方便日常依赖）。这是 Rust 生态区分多语言同源项目时的标准做法（如 `redis-rs/redis-rs` → crate `redis`、`gyscos/zstd-rs` → crate `zstd`）。
->
-> Go 语言版本：[github.com/vixalie/graft](https://github.com/vixalie/graft)
+> **命名约定**：仓库 / 项目名为 `graft-rs`，crates.io 上的 crate 名为 `graft`。
 >
 > ⚠️ **当前处于早期开发阶段（0.1.0 alpha）**：核心骨架完整，部分细节与安全校验尚在补齐中，**暂不建议生产使用**。详见 [项目状态](#项目状态)。
 
@@ -46,7 +44,7 @@
 - 🗓️ `allow_unsafe_update` / `allow_unsafe_delete` —— 显式放行无 WHERE 的 UPDATE/DELETE
 - 🗓️ MSSQL `MERGE` 形式的 UPSERT
 
-完整路线图见 [`docs/2-sql-query-builder-roadmap.md`](docs/2-sql-query-builder-roadmap.md)。
+完整路线图见 [`docs/roadmap.md`](docs/roadmap.md)。
 
 ## 安装
 
@@ -76,8 +74,6 @@ graft = { version = "0.1", default-features = false, features = ["postgresql", "
 | `chrono`     | `NaiveDateTime` / `DateTime<Utc>` 参数支持        |      |
 | `derive`     | `#[derive(InsertRow)]` 派生宏                     |      |
 | `executor`   | `Executor` trait（异步执行抽象，需 `async-trait`）|      |
-
-> 后端 feature 互相独立、可叠加 —— 同一二进制内可同时构建 Postgres 与 MySQL 的查询。
 
 ## 快速开始
 
@@ -165,8 +161,6 @@ q.clone().build(&MssqlBackend).unwrap();      // @P1 @P2
 q.clone().build(&SqliteBackend).unwrap();     // ? ?
 q.build(&MariaDbBackend).unwrap();            // ? ? (同 MySQL)
 ```
-
-> 提示：后端类型本身是零字段单元结构体（如 `PostgresBackend`），可放心拷贝或作为常量传递。
 
 ## 高级用法
 
@@ -424,24 +418,6 @@ sql-query-builder/
     └── src/lib.rs                      # #[derive(InsertRow)]
 ```
 
-99% 的用户只需依赖 `graft` 这一个 crate；`graft-core` / `graft-derive` 是实现细节。
-
-## 与 Go 版本的差异
-
-graft (Rust) 与 [graft (Go)](https://github.com/vixalie/graft) 在 API 与语义上保持高度一致，但在错误处理与类型系统上充分利用 Rust 的特性：
-
-| 维度           | Go                                 | Rust                                              |
-|----------------|------------------------------------|---------------------------------------------------|
-| 错误处理       | panic（构建时编程错误）            | `BuildResult<QueryResult>` —— 调用方决定          |
-| 参数承载       | `[]any` + 运行时反射               | `Param` 枚举 + `From<T>` —— 编译期类型安全        |
-| 多后端选择     | 运行时传 `Backend` interface       | 同左，但后端实现按 Cargo feature 编译入包         |
-| 链式 API 风格  | receiver 指针（`*QueryBuilder`）   | consume-and-return（值传递）—— 中间态不可误用     |
-| 结构体绑定     | 反射或手写                         | `#[derive(InsertRow)]` 派生宏                     |
-| 时间类型       | `time.Time`                        | `chrono::NaiveDateTime` / `DateTime<Utc>` (feature) |
-| 执行           | 通过用户驱动                       | `Executor` trait（async，feature-gated）          |
-
-API 命名沿用 Go 版本的 `and_where` / `or_where` / `and_group` 等，仅按 Rust 规范从 `CamelCase` 转为 `snake_case`。
-
 ## 安全防护
 
 graft 的安全底线：
@@ -453,7 +429,7 @@ graft 的安全底线：
 5. **UPDATE / DELETE 无 WHERE** → 🗓️ 路线图 Phase 4 将默认拒绝，提供 `allow_unsafe_*` 逃生舱
 6. **MSSQL OFFSET 必须 ORDER BY** → 🗓️ 路线图 Phase 4
 
-完整安全审计计划见 `docs/2-sql-query-builder-roadmap.md` 第 5 节。
+完整安全审计计划见 `docs/roadmap.md` 第 5 节。
 
 ## 项目状态
 
@@ -461,11 +437,9 @@ graft 的安全底线：
 |------------------|----------------------------------------------------------|
 | 编译             | ✅ `cargo build --all-features` 通过（3 个 dead_code warning） |
 | 功能完整度       | ~85%（核心骨架完整，部分语法糖与可选条件待补齐）          |
-| 测试覆盖率       | ⚠️ 0%（路线图 Phase 6 计划新增 ~80 个用例与 Go 版本对齐） |
+| 测试覆盖率       | ⚠️ 0%（路线图 Phase 6 计划新增 ~80 个用例）                |
 | 已知问题         | LIKE 当前未参数化（Phase 1 修复）；MSSQL UPSERT 占位      |
 | 生产可用性       | ❌ 不推荐 —— 待 Phase 1（安全修复）与 Phase 6（测试）完成 |
-
-详细路线图：[`docs/2-sql-query-builder-roadmap.md`](docs/2-sql-query-builder-roadmap.md)
 
 设计备忘：[`docs/SQLQueryBuilder-Design-Memo.md`](docs/SQLQueryBuilder-Design-Memo.md)
 
