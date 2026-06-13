@@ -1,0 +1,24 @@
+[package]
+name = "graft-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Core types and Backend trait for graft (Rust)"
+
+[dependencies]
+chrono = { version = "0.4", optional = true }
+async-trait = { version = "0.1", optional = true }
+
+[features]
+default = []
+postgresql = ["dep:chrono"]
+mysql      = ["dep:chrono"]
+mariadb    = ["dep:chrono"]
+mssql      = []
+sqlite     = []
+chrono     = ["dep:chrono"]
+executor   = ["dep:async-trait"]

@@ -1,0 +1,29 @@
+[package]
+name = "graft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Multi-backend dynamic SQL query builder (Rust) with compile-time dialect selection"
+
+[dependencies]
+graft-core = { path = "../graft-core" }
+graft-derive = { path = "../graft-derive", optional = true }
+
+[features]
+default = ["postgresql"]
+
+# 数据库后端
+postgresql = ["graft-core/postgresql"]
+mysql      = ["graft-core/mysql"]
+mariadb    = ["graft-core/mariadb"]
+mssql      = ["graft-core/mssql"]
+sqlite     = ["graft-core/sqlite"]
+
+# 可选增强
+chrono   = ["graft-core/chrono"]
+derive   = ["dep:graft-derive"]
+executor = ["graft-core/executor"]

@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "graft-core",
+    "graft-derive",
+    "graft",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/vixalie/graft-rs"
+homepage = "https://github.com/vixalie/graft-rs"
+keywords = ["sql", "query-builder", "database", "postgres", "mysql", "sqlite", "mssql"]
+categories = ["database"]
