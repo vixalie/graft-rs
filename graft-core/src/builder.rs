@@ -212,6 +212,17 @@ impl QueryBuilder {
         }
     }
 
+    /// 添加 AND 函数表达式 WHERE 条件（如 `UPPER(name)`）。
+    /// build 时表达式不被引号包裹（与 ADR-002 一致）。
+    pub fn and_where_expr(self, expr: &str) -> WhereAdder<Self> {
+        self.and_where(expr)
+    }
+
+    /// 添加 OR 函数表达式 WHERE 条件。
+    pub fn or_where_expr(self, expr: &str) -> WhereAdder<Self> {
+        self.or_where(expr)
+    }
+
     /// 添加 AND EXISTS 子查询。
     pub fn and_exists(mut self, subquery: QueryBuilder) -> Self {
         self.where_list.push(WhereGroup::new(
@@ -921,6 +932,13 @@ impl QueryBuilder {
         Ok(())
     }
 
+    /// 判断列名是否为简单标识符（仅字母数字下划线）。
+    /// 函数表达式（如 `UPPER(name)`）含 `()`/`.`/空格等，识别为非简单标识符不加引号。
+    /// 与 ADR-002 列名智能引用策略一致。
+    fn is_simple_ident(name: &str) -> bool {
+        !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+    }
+
     fn build_where_list<B: Backend>(
         &self,
         groups: &[WhereGroup],
@@ -936,7 +954,11 @@ impl QueryBuilder {
             }
             match &group.kind {
                 WhereKind::Column { column, op, value } => {
-                    write!(sql, "{} {} ", backend.quote_ident(column), op.sql()).unwrap();
+                    if Self::is_simple_ident(column) {
+                        write!(sql, "{} {} ", backend.quote_ident(column), op.sql()).unwrap();
+                    } else {
+                        write!(sql, "{} {} ", column, op.sql()).unwrap();
+                    }
                     match value {
                         Expr::Value(p) => {
                             write!(sql, "{}", backend.placeholder(*idx)).unwrap();
@@ -1321,6 +1343,46 @@ impl<T: HasWhere> WhereAdder<T> {
         }
     }
 
+    /// 可选 ne：`None` 时跳过条件。
+    pub fn ne_opt(self, val: Option<impl Into<Param>>) -> T {
+        match val {
+            Some(v) => self.ne(v),
+            None => self.target,
+        }
+    }
+
+    /// 可选 gt：`None` 时跳过条件。
+    pub fn gt_opt(self, val: Option<impl Into<Param>>) -> T {
+        match val {
+            Some(v) => self.gt(v),
+            None => self.target,
+        }
+    }
+
+    /// 可选 gte：`None` 时跳过条件。
+    pub fn gte_opt(self, val: Option<impl Into<Param>>) -> T {
+        match val {
+            Some(v) => self.gte(v),
+            None => self.target,
+        }
+    }
+
+    /// 可选 lt：`None` 时跳过条件。
+    pub fn lt_opt(self, val: Option<impl Into<Param>>) -> T {
+        match val {
+            Some(v) => self.lt(v),
+            None => self.target,
+        }
+    }
+
+    /// 可选 lte：`None` 时跳过条件。
+    pub fn lte_opt(self, val: Option<impl Into<Param>>) -> T {
+        match val {
+            Some(v) => self.lte(v),
+            None => self.target,
+        }
+    }
+
     /// IN 条件。
     pub fn in_(self, vals: impl IntoIterator<Item: Into<Param>>) -> T {
         let Self {
@@ -1359,6 +1421,96 @@ impl<T: HasWhere> WhereAdder<T> {
             column,
             values: vec![vec![Expr::Subquery(Box::new(subquery))]],
             negated: false,
+        };
+        target.add_where(logic, kind)
+    }
+
+    /// 列 = (子查询)。子查询必须返回单行。
+    pub fn eq_subquery(self, sub: QueryBuilder) -> T {
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
+        let kind = WhereKind::Column {
+            column,
+            op: CmpOp::Eq,
+            value: Expr::Subquery(Box::new(sub)),
+        };
+        target.add_where(logic, kind)
+    }
+
+    /// 列 <> (子查询)。
+    pub fn neq_subquery(self, sub: QueryBuilder) -> T {
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
+        let kind = WhereKind::Column {
+            column,
+            op: CmpOp::Ne,
+            value: Expr::Subquery(Box::new(sub)),
+        };
+        target.add_where(logic, kind)
+    }
+
+    /// 列 > (子查询)。
+    pub fn gt_subquery(self, sub: QueryBuilder) -> T {
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
+        let kind = WhereKind::Column {
+            column,
+            op: CmpOp::Gt,
+            value: Expr::Subquery(Box::new(sub)),
+        };
+        target.add_where(logic, kind)
+    }
+
+    /// 列 >= (子查询)。
+    pub fn gte_subquery(self, sub: QueryBuilder) -> T {
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
+        let kind = WhereKind::Column {
+            column,
+            op: CmpOp::Gte,
+            value: Expr::Subquery(Box::new(sub)),
+        };
+        target.add_where(logic, kind)
+    }
+
+    /// 列 < (子查询)。
+    pub fn lt_subquery(self, sub: QueryBuilder) -> T {
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
+        let kind = WhereKind::Column {
+            column,
+            op: CmpOp::Lt,
+            value: Expr::Subquery(Box::new(sub)),
+        };
+        target.add_where(logic, kind)
+    }
+
+    /// 列 <= (子查询)。
+    pub fn lte_subquery(self, sub: QueryBuilder) -> T {
+        let Self {
+            mut target,
+            logic,
+            column,
+        } = self;
+        let kind = WhereKind::Column {
+            column,
+            op: CmpOp::Lte,
+            value: Expr::Subquery(Box::new(sub)),
         };
         target.add_where(logic, kind)
     }
@@ -1461,6 +1613,16 @@ impl GroupBuilder {
             column: column.to_string(),
             logic: LogicOp::Or,
         }
+    }
+
+    /// AND 函数表达式条件（如 `UPPER(name)`）。
+    pub fn and_where_expr(self, expr: &str) -> WhereAdder<Self> {
+        self.and_where(expr)
+    }
+
+    /// OR 函数表达式条件。
+    pub fn or_where_expr(self, expr: &str) -> WhereAdder<Self> {
+        self.or_where(expr)
     }
 
     /// OR EXISTS。
@@ -1969,5 +2131,273 @@ mod tests {
             .unwrap();
 
         assert!(result.sql.contains("INNER JOIN"));
+    }
+
+    // ============================================================
+    // Phase 2 — *Opt 变体
+    // ============================================================
+
+    /// ne_opt(Some(val)) 生成 `<> $1` 条件。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn ne_opt_with_value_adds_condition() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .and_where("status")
+            .ne_opt(Some("banned"))
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(result.sql.contains("<>"));
+        assert!(result.sql.contains("$1"));
+        assert_eq!(result.params, vec![Param::Text("banned".to_string())]);
+    }
+
+    /// ne_opt(None) 跳过条件。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn ne_opt_none_skips_condition() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .and_where("status")
+            .ne_opt(Option::<&str>::None)
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(!result.sql.contains("<>"));
+        assert!(result.params.is_empty());
+    }
+
+    /// gt_opt 正常工作。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn gt_opt_adds_condition() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .and_where("age")
+            .gt_opt(Some(18))
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(result.sql.contains("> $1"));
+        assert_eq!(result.params, vec![Param::I32(18)]);
+    }
+
+    /// gte_opt 正常工作。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn gte_opt_adds_condition() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .and_where("age")
+            .gte_opt(Some(18))
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(result.sql.contains(">= $1"));
+        assert_eq!(result.params, vec![Param::I32(18)]);
+    }
+
+    /// lt_opt 正常工作。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn lt_opt_adds_condition() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .and_where("age")
+            .lt_opt(Some(65))
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(result.sql.contains("< $1"));
+        assert_eq!(result.params, vec![Param::I32(65)]);
+    }
+
+    /// lte_opt 正常工作。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn lte_opt_adds_condition() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .and_where("age")
+            .lte_opt(Some(65))
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(result.sql.contains("<= $1"));
+        assert_eq!(result.params, vec![Param::I32(65)]);
+    }
+
+    // ============================================================
+    // Phase 2 — 子查询比较方法
+    // ============================================================
+
+    /// eq_subquery 生成 `col = (SELECT ...)`。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn eq_subquery_generates_correct_sql() {
+        let sub = QueryBuilder::select(&["AVG(salary)"]).from("employees");
+        let result = QueryBuilder::select(&["name"])
+            .from("users")
+            .and_where("salary")
+            .eq_subquery(sub)
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            result
+                .sql
+                .contains("= (SELECT AVG(salary) FROM \"employees\")"),
+            "expected subquery equality, got: {}",
+            result.sql
+        );
+    }
+
+    /// gt_subquery 生成 `col > (SELECT ...)`。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn gt_subquery_generates_correct_sql() {
+        let sub = QueryBuilder::select(&["AVG(salary)"]).from("employees");
+        let result = QueryBuilder::select(&["name"])
+            .from("users")
+            .and_where("salary")
+            .gt_subquery(sub)
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            result
+                .sql
+                .contains("> (SELECT AVG(salary) FROM \"employees\")"),
+            "expected subquery gt, got: {}",
+            result.sql
+        );
+    }
+
+    /// neq_subquery 生成 `col <> (SELECT ...)`。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn neq_subquery_generates_correct_sql() {
+        let sub = QueryBuilder::select(&["1"]).from("banned_users");
+        let result = QueryBuilder::select(&["name"])
+            .from("users")
+            .and_where("id")
+            .neq_subquery(sub)
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            result.sql.contains("<> (SELECT 1 FROM \"banned_users\")"),
+            "expected subquery neq, got: {}",
+            result.sql
+        );
+    }
+
+    /// 子查询参数索引与外部连续。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn subquery_param_continuity() {
+        let sub = QueryBuilder::select(&["id"])
+            .from("blacklist")
+            .and_where("reason")
+            .eq("fraud");
+        let result = QueryBuilder::select(&["id", "name"])
+            .from("users")
+            .and_where("status")
+            .eq("active")
+            .and_where("id")
+            .in_subquery(sub)
+            .build(&PostgresBackend)
+            .unwrap();
+
+        // "active" 是 $1, "fraud" 是 $2（后序遍历：子查询参数先分配）
+        assert_eq!(
+            result.params,
+            vec![
+                Param::Text("active".to_string()),
+                Param::Text("fraud".to_string())
+            ]
+        );
+        assert!(result.sql.contains("$1"));
+        assert!(result.sql.contains("$2"));
+    }
+
+    // ============================================================
+    // Phase 2 — 函数表达式 WHERE
+    // ============================================================
+
+    /// 函数表达式 `UPPER(col)` 不加引号。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn where_expr_does_not_quote() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .and_where_expr("UPPER(email)")
+            .eq("ALICE@EXAMPLE.COM")
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            result.sql.contains("UPPER(email) = $1"),
+            "expected unquoted expression, got: {}",
+            result.sql
+        );
+        assert!(
+            !result.sql.contains("\"UPPER\""),
+            "expression should not be quoted: {}",
+            result.sql
+        );
+    }
+
+    /// 简单列名仍被加引号（回归测试，确保 is_simple_ident 不会过度宽松）。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn where_expr_with_simple_ident_still_quotes() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .and_where("name")
+            .eq("alice")
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            result.sql.contains("\"name\""),
+            "simple identifier should be quoted, got: {}",
+            result.sql
+        );
+    }
+
+    /// 函数表达式在 GroupBuilder 中也能工作。
+    /// 使用 `or_group` 验证 OR 语义：`or_where_expr` 改为 `and_where_expr`，
+    /// 因为组内条件连接符由组的 logic 决定（`and_group` = 全部 AND，`or_group` = 全部 OR）。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn and_where_expr_with_group() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .or_group(|g| {
+                g.and_where_expr("LOWER(name)")
+                    .eq("alice")
+                    .and_where_expr("UPPER(email)")
+                    .eq("ALICE@EXAMPLE.COM")
+            })
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            result.sql.contains("LOWER(name) = $1"),
+            "expected LOWER in group, got: {}",
+            result.sql
+        );
+        assert!(
+            result.sql.contains("UPPER(email) = $2"),
+            "expected UPPER in group, got: {}",
+            result.sql
+        );
+        assert!(
+            result.sql.contains(" OR "),
+            "expected OR in group, got: {}",
+            result.sql
+        );
     }
 }

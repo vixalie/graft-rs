@@ -12,7 +12,7 @@
 - **编译期类型安全**：`Param` 配合 `From<T>` trait —— 用户不会"忘记"参数化
 - **Result 优于 panic**：所有可恢复错误经由 `BuildResult<T>`，调用方决定处理策略
 - **直觉式链式调用**：`and_where("col").eq(val)` 直接对应 `WHERE col = ?` 的写 SQL 直觉
-- **可选条件原生支持**：`eq_opt` / `set_opt` / `when` —— `None` 自动跳过
+- **可选条件原生支持**：全部比较运算符的 `*_opt` 变体（`eq_opt` / `ne_opt` / `gt_opt` / `gte_opt` / `lt_opt` / `lte_opt` / `like_opt` / `in_opt` / `set_opt`）+ 条件守卫 `when` —— `None` 自动跳过
 - **闭包即括号**：`and_group(|g| {...})` 直接对应 `AND (...)`
 - **多后端编译期选**：Cargo feature flags 决定参与编译的后端，零运行时开销
 - **零生产依赖**：核心 crate 不引入任何运行时依赖，可选 `chrono` 时间类型按 feature 加入
@@ -24,25 +24,25 @@
 - ✅ CRUD 全覆盖：SELECT / INSERT / UPDATE / DELETE
 - ✅ 5 种后端方言：Postgres / MySQL / MariaDB / MSSQL / SQLite
 - ✅ 丰富的 WHERE 条件：`=`、`<>`、`>`、`>=`、`<`、`<=`、`LIKE`、`IN`、`BETWEEN`、`IS NULL` / `IS NOT NULL`、`EXISTS` / `NOT EXISTS`
+- ✅ 全部比较运算符的可选变体：`eq_opt` / `ne_opt` / `gt_opt` / `gte_opt` / `lt_opt` / `lte_opt` / `like_opt` / `in_opt` / `set_opt`
 - ✅ WHERE 分组嵌套：`and_group` / `or_group` 无限嵌套
 - ✅ 条件守卫 `when(cond, |q| ...)`
-- ✅ JOIN 支持：`INNER` / `LEFT` / `RIGHT` / `FULL OUTER` / `CROSS`，含参数化 ON 条件与子分组
-- ✅ 子查询：FROM 子查询、JOIN 子查询、WHERE `IN` 子查询、`EXISTS`
+- ✅ 函数表达式 WHERE：`and_where_expr` / `or_where_expr`（如 `UPPER(name) = $1`）
+- ✅ 子查询比较：`eq_subquery` / `neq_subquery` / `gt_subquery` / `gte_subquery` / `lt_subquery` / `lte_subquery`（如 `salary > (SELECT AVG(salary) FROM employees)`）
+- ✅ JOIN 支持：`INNER` / `LEFT` / `RIGHT` / `FULL OUTER` / `CROSS`，含参数化 ON 条件与子分组；SQLite 自动拒绝不支持的 `RIGHT` / `FULL`
+- ✅ 子查询：FROM 子查询、JOIN 子查询、WHERE `IN` 子查询、`EXISTS` / `NOT EXISTS`
 - ✅ CTE：普通 `WITH` 与递归 `WITH RECURSIVE`
 - ✅ GROUP BY / HAVING / ORDER BY / LIMIT / OFFSET（MSSQL 自动改写为 `OFFSET … FETCH NEXT`）
 - ✅ INSERT 批量插入、`INSERT … SELECT`
 - ✅ RETURNING（Postgres）/ OUTPUT（MSSQL）
-- ✅ UPSERT：`ON CONFLICT` (Postgres / SQLite) / `ON DUPLICATE KEY` (MySQL / MariaDB)
+- ✅ UPSERT：`ON CONFLICT` (Postgres / SQLite) / `ON DUPLICATE KEY` (MySQL / MariaDB)；MSSQL 返回 `UnsupportedFeature`（路线图 Phase 5 完整 `MERGE`）
+- ✅ LIKE 参数化 —— 值经 `Param` 注入，杜绝注入风险
 - ✅ `#[derive(InsertRow)]` —— 派生宏自动生成 `FromRow::insert_values()`
 - ✅ Param 枚举强制参数化：`bool` / `i8`~`i64` / `f32` / `f64` / `String` / `&str` / `Option<T>` / `Vec<u8>` / `chrono`
 - ✅ `Executor` trait（feature-gated，async）—— 端到端执行抽象，等待驱动适配
-- 🚧 部分可选条件变体（仅 `eq_opt` / `like_opt` / `in_opt` / `set_opt`）—— 其余 `*_opt` 在路线图 Phase 2
-- 🚧 LIKE 安全（当前 `like()` 走 `RawExpr`，路线图 Phase 1 改为参数化）
-- 🗓️ `select_ident` / `group_by_ident` / `order_by_safe` —— 智能列名引用与白名单
-- 🗓️ `and_where_expr` / `or_where_expr` —— 函数表达式 WHERE
-- 🗓️ `*_subquery` 子查询比较运算符（`eq_subquery` 等）
-- 🗓️ `allow_unsafe_update` / `allow_unsafe_delete` —— 显式放行无 WHERE 的 UPDATE/DELETE
-- 🗓️ MSSQL `MERGE` 形式的 UPSERT
+- 🗓️ `select_ident` / `group_by_ident` / `order_by_safe` —— 智能列名引用与白名单（路线图 Phase 3）
+- 🗓️ `allow_unsafe_update` / `allow_unsafe_delete` —— 显式放行无 WHERE 的 UPDATE/DELETE（路线图 Phase 4）
+- 🗓️ MSSQL `MERGE` 形式的 UPSERT 完整实现（路线图 Phase 5）
 
 完整路线图见 [`docs/roadmap.md`](docs/roadmap.md)。
 
@@ -182,6 +182,26 @@ let result = QueryBuilder::select(&["*"]).from("users")
 // params: [Text("eng")]
 ```
 
+全部 8 个比较运算符都有 `*_opt` 变体，组合使用可表达任意复杂动态条件：
+
+```rust
+let name: Option<&str> = Some("alice");
+let min_age: Option<i32> = Some(18);
+let max_age: Option<i32> = None;       // 跳过
+let status: Option<&str> = Some("active");
+
+QueryBuilder::select(&["*"]).from("users")
+    .and_where("name").eq_opt(name)
+    .and_where("age").gte_opt(min_age)
+    .and_where("age").lte_opt(max_age)
+    .and_where("status").ne_opt(status)
+    .build(&PostgresBackend)?;
+
+// sql:    SELECT * FROM "users"
+//         WHERE "name" = $1 AND "age" >= $2 AND "status" <> $3
+// params: [Text("alice"), I32(18), Text("active")]
+```
+
 UPDATE 同样支持：
 
 ```rust
@@ -218,6 +238,29 @@ QueryBuilder::select(&["*"]).from("users")
     .when(with_dept, |q| q.and_where("dept").eq("eng"))
     .build(&PostgresBackend)?;
 ```
+
+### 函数表达式 WHERE
+
+`and_where_expr` / `or_where_expr` 接受任意 SQL 表达式作为左值，build 时不加引号（与 ADR-002 一致）：
+
+```rust
+use graft::{QueryBuilder, backends::PostgresBackend};
+
+QueryBuilder::select(&["id"]).from("users")
+    .and_where_expr("UPPER(email)").eq("ALICE@EXAMPLE.COM")
+    .and_where_expr("DATE(created_at)").eq("2026-01-01")
+    .and_where_expr("price * quantity").gt(1000)
+    .build(&PostgresBackend)
+    .unwrap();
+
+// sql:    SELECT id FROM "users"
+//         WHERE UPPER(email) = $1
+//           AND DATE(created_at) = $2
+//           AND price * quantity > $3
+// params: [Text("ALICE@EXAMPLE.COM"), Text("2026-01-01"), I32(1000)]
+```
+
+判定规则：含 `(`、`.`、空格等非简单标识符字符的表达式不加引号。简单列名（仅字母数字下划线）仍被加引号以保留与原 `and_where` 一致的行为。
 
 ### JOIN
 
@@ -360,7 +403,9 @@ let values: Vec<Param> = u.insert_values();
 
 字段加 `#[insert_row(skip)]` 可跳过（如自增 id）。
 
-### 子查询比较（`IN` / `EXISTS`）
+### 子查询比较（`IN` / 标量比较 / `EXISTS`）
+
+#### `IN` 子查询
 
 ```rust
 let blocked = QueryBuilder::select(&["id"]).from("blocked_users")
@@ -369,8 +414,25 @@ let blocked = QueryBuilder::select(&["id"]).from("blocked_users")
 QueryBuilder::select(&["*"]).from("orders")
     .and_where("user_id").in_subquery(blocked)
     .build(&PostgresBackend)?;
+```
 
-// 或 EXISTS
+#### 标量子查询比较（`eq_subquery` / `gt_subquery` 等）
+
+子查询必须返回单行。生成 `col OP (SELECT ...)` 形式：
+
+```rust
+let avg_salary = QueryBuilder::select(&["AVG(salary)"]).from("employees");
+
+QueryBuilder::select(&["name"]).from("users")
+    .and_where("salary").gt_subquery(avg_salary)   // salary > (SELECT AVG(salary) FROM employees)
+    .build(&PostgresBackend)?;
+
+// 也支持 eq / neq / gte / lt / lte
+```
+
+#### `EXISTS` / `NOT EXISTS`
+
+```rust
 let sub = QueryBuilder::select(&["1"]).from("orders")
     .and_where("orders.user_id").eq_col("users.id");
 
@@ -425,9 +487,12 @@ graft 的安全底线：
 1. **所有用户值经由 `Param` 枚举与占位符**，绝不拼入 SQL 字符串
 2. **`raw()` 强制两段式签名**（SQL 片段 + 独立 `Vec<Param>`），不允许混合
 3. **UPDATE 无 SET** → `Err(BuildError::NoSetClauses)`
-4. **空 `IN ()` 子句** → 🚧 即将返回 `Err(BuildError::EmptyInClause)`（Phase 1）
-5. **UPDATE / DELETE 无 WHERE** → 🗓️ 路线图 Phase 4 将默认拒绝，提供 `allow_unsafe_*` 逃生舱
-6. **MSSQL OFFSET 必须 ORDER BY** → 🗓️ 路线图 Phase 4
+4. **空 `IN ()` 子句** → `Err(BuildError::EmptyInClause)`（含 `and_group` / `or_group` 嵌套递归校验）
+5. **LIKE 值参数化** —— 走 `CmpOp::Like` + `Expr::Value`，与 `eq` 一样安全
+6. **SQLite 不支持的 JOIN 类型**（`RIGHT` / `FULL`）→ `Err(BuildError::UnsupportedJoinType)`，由 `Backend::supports_join_type` 控制
+7. **MSSQL UPSERT** → `Err(BuildError::UnsupportedFeature)`（Phase 1 阶段性错误，完整 `MERGE` 推迟至 Phase 5）
+8. **UPDATE / DELETE 无 WHERE** → 🗓️ 路线图 Phase 4 将默认拒绝，提供 `allow_unsafe_*` 逃生舱
+9. **MSSQL OFFSET 必须 ORDER BY** → 🗓️ 路线图 Phase 4
 
 完整安全审计计划见 `docs/roadmap.md` 第 5 节。
 
@@ -435,11 +500,23 @@ graft 的安全底线：
 
 | 维度             | 当前状态                                                 |
 |------------------|----------------------------------------------------------|
-| 编译             | ✅ `cargo build --all-features` 通过（3 个 dead_code warning） |
-| 功能完整度       | ~85%（核心骨架完整，部分语法糖与可选条件待补齐）          |
-| 测试覆盖率       | ⚠️ 0%（路线图 Phase 6 计划新增 ~80 个用例）                |
-| 已知问题         | LIKE 当前未参数化（Phase 1 修复）；MSSQL UPSERT 占位      |
-| 生产可用性       | ❌ 不推荐 —— 待 Phase 1（安全修复）与 Phase 6（测试）完成 |
+| 编译             | ✅ `cargo build --all-features` 零 warning                |
+| 静态检查         | ✅ `cargo clippy --all-features --all-targets -- -D warnings` 通过 |
+| 测试             | ✅ 23 单元测试 + 3 doc-test 全部通过（`cargo test --all-features`） |
+| 功能完整度       | ~95%（核心 WHERE 系统 100% 对齐 Go 版；路线图 Phase 3-6 待续） |
+| 安全基线         | ✅ Phase 1 完成（LIKE 参数化 / 空 IN / JOIN 校验 / MSSQL UPSERT 报错） |
+| WHERE 系统       | ✅ Phase 2 完成（8 个 `*_opt` 变体 / 6 个子查询比较 / 函数表达式） |
+| 已知限制         | 🗓️ Phase 3（列名智能引用）/ Phase 4（UPDATE/DELETE 安全策略）/ Phase 5（MSSQL MERGE） |
+| 生产可用性       | ⚠️ 不推荐 —— WHERE 系统已可用，但 Phase 6（综合测试）尚未完成 |
+
+路线图完成情况：
+
+- ✅ Phase 1（安全修复 + 质量基线，2026-06-14 完成）
+- ✅ Phase 2（WHERE 系统功能补齐，2026-06-14 完成）
+- 🗓️ Phase 3（SELECT/GROUP/ORDER 智能引用 + Backend 增强）
+- 🗓️ Phase 4（UPDATE/DELETE 安全策略）
+- 🗓️ Phase 5（剩余语法糖 + MSSQL MERGE）
+- 🗓️ Phase 6（综合测试，目标 ~80 用例）
 
 设计备忘：[`docs/SQLQueryBuilder-Design-Memo.md`](docs/SQLQueryBuilder-Design-Memo.md)
 

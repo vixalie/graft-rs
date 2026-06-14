@@ -30,7 +30,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields};
+use syn::{Data, DeriveInput, Fields, parse_macro_input};
 
 /// 为结构体生成 `FromRow` trait 实现。
 ///
@@ -56,12 +56,9 @@ pub fn derive_insert_row(input: TokenStream) -> TokenStream {
             }
         },
         _ => {
-            return syn::Error::new(
-                name.span(),
-                "InsertRow only supports structs",
-            )
-            .to_compile_error()
-            .into();
+            return syn::Error::new(name.span(), "InsertRow only supports structs")
+                .to_compile_error()
+                .into();
         }
     };
 
