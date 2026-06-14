@@ -1,7 +1,7 @@
 use crate::backend::Backend;
 use crate::param::Param;
 use crate::result::BuildResult;
-use crate::types::ConflictAction;
+use crate::types::{ConflictAction, JoinType};
 
 /// MariaDB 后端 — 与 MySQL 基本一致，需要时可独立调优。
 #[derive(Debug, Clone, Default)]
@@ -22,6 +22,11 @@ impl Backend for MariaDbBackend {
 
     fn supports_bulk_returning(&self) -> bool {
         false
+    }
+
+    /// MariaDB 不支持 FULL OUTER JOIN。
+    fn supports_join_type(&self, jt: JoinType) -> bool {
+        !matches!(jt, JoinType::Full)
     }
 
     fn on_conflict(

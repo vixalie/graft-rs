@@ -1,7 +1,7 @@
 use crate::backend::Backend;
 use crate::param::Param;
 use crate::result::BuildResult;
-use crate::types::ConflictAction;
+use crate::types::{ConflictAction, JoinType};
 
 /// MySQL 后端 — 使用 `?` 占位符和反引号引用标识符。
 /// 不支持 RETURNING（需要 `LAST_INSERT_ID()` 降级）。
@@ -23,6 +23,11 @@ impl Backend for MysqlBackend {
 
     fn supports_bulk_returning(&self) -> bool {
         false
+    }
+
+    /// MySQL 不支持 FULL OUTER JOIN。
+    fn supports_join_type(&self, jt: JoinType) -> bool {
+        !matches!(jt, JoinType::Full)
     }
 
     fn on_conflict(

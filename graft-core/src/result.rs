@@ -47,6 +47,8 @@ pub enum BuildError {
     UnsupportedJoinType(String),
     UnsupportedFeature(String),
     ModeMismatch(String),
+    /// ORDER BY 或类似上下文中使用了不在白名单内的列名
+    UnsafeColumn(String),
 }
 
 impl std::fmt::Display for BuildError {
@@ -61,6 +63,7 @@ impl std::fmt::Display for BuildError {
             BuildError::ModeMismatch(m) => {
                 write!(f, "operation not valid for current query mode: {m}")
             }
+            BuildError::UnsafeColumn(col) => write!(f, "column not in whitelist: {col}"),
         }
     }
 }

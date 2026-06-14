@@ -31,6 +31,7 @@ pub struct QueryBuilder {
     pub(crate) joins: Vec<JoinClause>,
     pub(crate) where_list: Vec<WhereGroup>,
     pub(crate) group_by: Vec<String>,
+    pub(crate) group_by_ident: bool,
     pub(crate) having: Vec<WhereGroup>,
     pub(crate) order_by: Vec<(String, SortDir)>,
     pub(crate) limit: Option<usize>,
@@ -60,6 +61,8 @@ pub struct QueryBuilder {
 #[derive(Debug, Clone)]
 pub enum SelectExpr {
     Column(String),
+    /// 智能引用列名——简单标识符加引号，复杂表达式（含 `.`、`()` 等）不加引号。
+    Ident(String),
     Subquery(Box<QueryBuilder>, String), // subquery, alias
     Raw(String),
 }
@@ -81,6 +84,7 @@ impl QueryBuilder {
             joins: vec![],
             where_list: vec![],
             group_by: vec![],
+            group_by_ident: false,
             having: vec![],
             order_by: vec![],
             limit: None,
@@ -120,6 +124,30 @@ impl QueryBuilder {
         let mut b = Self::new(QueryMode::Select);
         b.columns.push(SelectExpr::Raw(expr.to_string()));
         b
+    }
+
+    /// 智能列名 SELECT。
+    ///
+    /// 简单标识符（仅字母数字下划线）将被后端引用，
+    /// 含 `.`、`()`、空格等的表达式则不加引号。
+    ///
+    /// **注意**：带 `AS` 别名的列名作为整体处理，不会分别引用两侧。
+    /// 例如 `select_ident(&["name AS user_name"])` 因含空格整体原样输出。
+    /// 如需分别引用，请用 `select(&["\"name\" AS \"user_name\""])` 自行处理。
+    ///
+    /// ```rust
+    /// use graft_core::QueryBuilder;
+    /// let qb = QueryBuilder::default()
+    ///     .select_ident(&["users.name", "age", "UPPER(email) AS email_upper"])
+    ///     .from("users");
+    /// # let _ = qb;
+    /// ```
+    pub fn select_ident(mut self, columns: &[&str]) -> Self {
+        self.columns = columns
+            .iter()
+            .map(|c| SelectExpr::Ident(c.to_string()))
+            .collect();
+        self
     }
 
     /// 创建 INSERT 查询。
@@ -383,6 +411,16 @@ impl QueryBuilder {
 
     pub fn group_by(mut self, columns: &[&str]) -> Self {
         self.group_by = columns.iter().map(|c| c.to_string()).collect();
+        self.group_by_ident = false; // 重置标志，确保行为由最后一次调用决定
+        self
+    }
+
+    /// 智能 GROUP BY。
+    ///
+    /// 对列名做智能引用（与 `select_ident` 规则一致）。
+    pub fn group_by_ident(mut self, columns: &[&str]) -> Self {
+        self.group_by = columns.iter().map(|c| c.to_string()).collect();
+        self.group_by_ident = true;
         self
     }
 
@@ -394,6 +432,63 @@ impl QueryBuilder {
     pub fn order_by(mut self, column: &str, dir: SortDir) -> Self {
         self.order_by.push((column.to_string(), dir));
         self
+    }
+
+    /// 白名单校验的 ORDER BY。
+    ///
+    /// 仅当 `column` 在 `whitelist` 中时才允许排序。
+    /// 否则返回 `Err(BuildError::UnsafeColumn)`。
+    ///
+    /// # 用法
+    ///
+    /// **在返回 `Result` 的函数中**（推荐，使用 `?` 运算符）：
+    ///
+    /// ```rust
+    /// # use graft_core::{QueryBuilder, SortDir, BuildResult, QueryResult};
+    /// # fn example() -> BuildResult<QueryResult> {
+    /// let result = QueryBuilder::select(&["id"]).from("users")
+    ///     .and_where("status").eq("active")
+    ///     .order_by_safe("name", SortDir::Asc, &["name", "id", "email"])?
+    ///     .build(&graft_core::backends::postgres::PostgresBackend)?;
+    /// # Ok(result)
+    /// # }
+    /// ```
+    ///
+    /// **在非 Result 上下文中**（使用 `.unwrap()`，信任白名单）：
+    ///
+    /// ```rust
+    /// use graft_core::{QueryBuilder, SortDir};
+    /// let qb = QueryBuilder::select(&["id"]).from("users")
+    ///     .order_by_safe("name", SortDir::Asc, &["name", "id", "email"])
+    ///     .unwrap();
+    /// # let _ = qb;
+    /// ```
+    ///
+    /// **与 `when()` 守卫配合**（用 `if let` 解包）：
+    ///
+    /// ```rust
+    /// # use graft_core::{QueryBuilder, SortDir, BuildResult, QueryResult};
+    /// # fn example(sort_col: Option<&str>) -> BuildResult<QueryResult> {
+    /// let qb = QueryBuilder::select(&["id"]).from("users");
+    /// let qb = if let Some(col) = sort_col {
+    ///     qb.order_by_safe(col, SortDir::Asc, &["name", "id"])?
+    /// } else {
+    ///     qb
+    /// };
+    /// let result = qb.build(&graft_core::backends::postgres::PostgresBackend)?;
+    /// # Ok(result)
+    /// # }
+    /// ```
+    pub fn order_by_safe(
+        self,
+        column: &str,
+        dir: SortDir,
+        whitelist: &[&str],
+    ) -> BuildResult<Self> {
+        if !whitelist.contains(&column) {
+            return Err(BuildError::UnsafeColumn(column.to_string()));
+        }
+        Ok(self.order_by(column, dir))
     }
 
     pub fn limit(mut self, limit: usize) -> Self {
@@ -606,6 +701,14 @@ impl QueryBuilder {
             }
             match col {
                 SelectExpr::Column(c) => sql.push_str(c),
+                SelectExpr::Ident(c) => {
+                    // 智能引用：简单列名 → quote_ident，否则原样输出
+                    if Self::is_simple_ident(c) {
+                        write!(sql, "{}", backend.quote_ident(c)).unwrap();
+                    } else {
+                        sql.push_str(c);
+                    }
+                }
                 SelectExpr::Subquery(sub, alias) => {
                     let (sub_sql, sub_params) = sub.build_select_query(backend, idx)?;
                     write!(sql, "({sub_sql}) AS {alias}").unwrap();
@@ -640,7 +743,22 @@ impl QueryBuilder {
         // 6. GROUP BY
         if !self.group_by.is_empty() {
             sql.push_str(" GROUP BY ");
-            sql.push_str(&self.group_by.join(", "));
+            if self.group_by_ident {
+                let quoted: Vec<String> = self
+                    .group_by
+                    .iter()
+                    .map(|c| {
+                        if Self::is_simple_ident(c) {
+                            backend.quote_ident(c)
+                        } else {
+                            c.clone()
+                        }
+                    })
+                    .collect();
+                sql.push_str(&quoted.join(", "));
+            } else {
+                sql.push_str(&self.group_by.join(", "));
+            }
         }
 
         // 7. HAVING
@@ -2399,5 +2517,337 @@ mod tests {
             "expected OR in group, got: {}",
             result.sql
         );
+    }
+
+    // ============================================================
+    // Phase 3 — SelectIdent
+    // ============================================================
+
+    /// 简单列名被 `quote_ident` 包裹。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn select_ident_quotes_simple_column() {
+        let result = QueryBuilder::default()
+            .select_ident(&["id", "name"])
+            .from("users")
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            result.sql.contains("\"id\""),
+            "expected quoted id, got: {}",
+            result.sql
+        );
+        assert!(
+            result.sql.contains("\"name\""),
+            "expected quoted name, got: {}",
+            result.sql
+        );
+    }
+
+    /// 含 `.` 或 `()` 的复杂表达式不加引号。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn select_ident_does_not_quote_complex() {
+        let result = QueryBuilder::default()
+            .select_ident(&["users.name", "COUNT(*)"])
+            .from("users")
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            result.sql.contains("users.name"),
+            "expected unquoted dotted column, got: {}",
+            result.sql
+        );
+        assert!(
+            result.sql.contains("COUNT(*)"),
+            "expected unquoted function call, got: {}",
+            result.sql
+        );
+        assert!(
+            !result.sql.contains("\"users.name\""),
+            "dotted column should not be quoted: {}",
+            result.sql
+        );
+    }
+
+    /// 原有 `select()` 行为不受影响（回归测试）。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn select_ident_mixed_with_select_unchanged() {
+        let result = QueryBuilder::select(&["id", "name"])
+            .from("users")
+            .build(&PostgresBackend)
+            .unwrap();
+
+        // 原始 select() 不加引号（保持向后兼容）
+        assert!(
+            result.sql.contains("SELECT id, name"),
+            "select() should output raw columns, got: {}",
+            result.sql
+        );
+    }
+
+    /// 空列名不 panic，原样输出。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn select_ident_empty_column() {
+        let result = QueryBuilder::default()
+            .select_ident(&["", "name"])
+            .from("users")
+            .build(&PostgresBackend)
+            .unwrap();
+
+        // 空字符串 is_simple_ident 返回 false，原样输出
+        assert!(
+            result.sql.contains("\"name\""),
+            "expected quoted name, got: {}",
+            result.sql
+        );
+    }
+
+    /// 带 AS 别名的列名因含空格整体原样输出不引用。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn select_ident_with_as_alias_raw() {
+        let result = QueryBuilder::default()
+            .select_ident(&["name AS user_name"])
+            .from("users")
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            result.sql.contains("name AS user_name"),
+            "expected raw 'AS' expression, got: {}",
+            result.sql
+        );
+        assert!(
+            !result.sql.contains("\"name AS user_name\""),
+            "AS alias should not be quoted as a whole: {}",
+            result.sql
+        );
+    }
+
+    // ============================================================
+    // Phase 3 — GroupByIdent
+    // ============================================================
+
+    /// GROUP BY 列被引用。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn group_by_ident_quotes_columns() {
+        let result = QueryBuilder::select(&["dept"])
+            .from("users")
+            .group_by_ident(&["dept", "role"])
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            result.sql.contains("GROUP BY \"dept\", \"role\""),
+            "expected quoted GROUP BY, got: {}",
+            result.sql
+        );
+    }
+
+    /// 函数表达式在 GROUP BY 中不加引号。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn group_by_ident_does_not_quote_expression() {
+        let result = QueryBuilder::select(&["dept"])
+            .from("users")
+            .group_by_ident(&["dept", "DATE(created_at)"])
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            result.sql.contains("\"dept\""),
+            "expected quoted dept, got: {}",
+            result.sql
+        );
+        assert!(
+            result.sql.contains("DATE(created_at)"),
+            "expected unquoted function expr, got: {}",
+            result.sql
+        );
+        assert!(
+            !result.sql.contains("\"DATE(created_at)\""),
+            "function expr should not be quoted: {}",
+            result.sql
+        );
+    }
+
+    /// 原有 `group_by()` 行为不变（回归测试）。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn group_by_legacy_unchanged() {
+        let result = QueryBuilder::select(&["dept"])
+            .from("users")
+            .group_by(&["dept", "role"])
+            .build(&PostgresBackend)
+            .unwrap();
+
+        // 原始 group_by() 不加引号
+        assert!(
+            result.sql.contains("GROUP BY dept, role"),
+            "legacy group_by() should output raw, got: {}",
+            result.sql
+        );
+    }
+
+    /// 链式 `group_by_ident().group_by()` 后 flag 被重置。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn group_by_ident_then_group_by_resets_flag() {
+        let result = QueryBuilder::select(&["dept"])
+            .from("users")
+            .group_by_ident(&["dept"]) // 先用 ident，flag=true
+            .group_by(&["role"]) // 再用普通 group_by，flag=false
+            .build(&PostgresBackend)
+            .unwrap();
+
+        // 应使用 group_by() 的行为：列名不加引号
+        assert!(
+            result.sql.contains("GROUP BY role"),
+            "group_by() after group_by_ident() should reset flag, got: {}",
+            result.sql
+        );
+        assert!(
+            !result.sql.contains("\"role\""),
+            "group_by() output should not be quoted, got: {}",
+            result.sql
+        );
+    }
+
+    // ============================================================
+    // Phase 3 — OrderBySafe
+    // ============================================================
+
+    /// 白名单内列名正常排序。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn order_by_safe_allows_whitelisted() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .order_by_safe("name", SortDir::Asc, &["name", "id", "email"])
+            .unwrap()
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            result.sql.contains("ORDER BY \"name\" ASC"),
+            "expected safe order by, got: {}",
+            result.sql
+        );
+    }
+
+    /// 白名单外列名返回 UnsafeColumn 错误。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn order_by_safe_rejects_unlisted() {
+        let result = QueryBuilder::select(&["id"]).from("users").order_by_safe(
+            "password",
+            SortDir::Asc,
+            &["name", "id", "email"],
+        );
+
+        match result {
+            Err(BuildError::UnsafeColumn(col)) => {
+                assert_eq!(col, "password", "unexpected column in error: {col}");
+            }
+            other => panic!("expected UnsafeColumn, got: {other:?}"),
+        }
+    }
+
+    /// 点号列名 `users.name` 白名单匹配工作。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn order_by_safe_dotted_column() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .order_by_safe("users.name", SortDir::Desc, &["users.name", "id"])
+            .unwrap()
+            .build(&PostgresBackend)
+            .unwrap();
+
+        assert!(
+            result.sql.contains("ORDER BY \"users.name\" DESC"),
+            "expected dotted column sort, got: {}",
+            result.sql
+        );
+    }
+
+    // ============================================================
+    // Phase 3 — Backend::supports_upsert
+    // ============================================================
+
+    /// MSSQL `supports_upsert` 返回 false。
+    #[cfg(feature = "mssql")]
+    #[test]
+    fn supports_upsert_mssql_false() {
+        use crate::backends::mssql::MssqlBackend;
+        assert!(!MssqlBackend.supports_upsert());
+    }
+
+    /// Postgres `supports_upsert` 返回 true。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn supports_upsert_pg_true() {
+        assert!(PostgresBackend.supports_upsert());
+    }
+
+    // ============================================================
+    // Phase 3 — MySQL/MariaDB FULL JOIN 拒绝
+    // ============================================================
+
+    /// MySQL 拒绝 FULL JOIN。
+    #[cfg(feature = "mysql")]
+    #[test]
+    fn mysql_rejects_full_join() {
+        use crate::backends::mysql::MysqlBackend;
+
+        let result = QueryBuilder::select(&["a.id"])
+            .from("a")
+            .full_join("b", "b")
+            .on("a.id", "b.a_id")
+            .build(&MysqlBackend);
+
+        match result {
+            Err(BuildError::UnsupportedJoinType(t)) => {
+                assert!(t.contains("FULL"), "unexpected join type: {t}");
+            }
+            other => panic!("expected UnsupportedJoinType, got: {other:?}"),
+        }
+    }
+
+    /// MariaDB 拒绝 FULL JOIN。
+    #[cfg(feature = "mariadb")]
+    #[test]
+    fn mariadb_rejects_full_join() {
+        use crate::backends::mariadb::MariaDbBackend;
+
+        let result = QueryBuilder::select(&["a.id"])
+            .from("a")
+            .full_join("b", "b")
+            .on("a.id", "b.a_id")
+            .build(&MariaDbBackend);
+
+        assert!(matches!(result, Err(BuildError::UnsupportedJoinType(_))));
+    }
+
+    /// MySQL 接受 INNER JOIN（正例）。
+    #[cfg(feature = "mysql")]
+    #[test]
+    fn mysql_accepts_inner_join() {
+        use crate::backends::mysql::MysqlBackend;
+
+        let result = QueryBuilder::select(&["a.id"])
+            .from("a")
+            .join("b", "b")
+            .on("a.id", "b.a_id")
+            .build(&MysqlBackend)
+            .unwrap();
+
+        assert!(result.sql.contains("INNER JOIN"));
     }
 }

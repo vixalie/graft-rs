@@ -49,6 +49,13 @@ pub trait Backend {
         true
     }
 
+    /// 后端是否支持 UPSERT（`ON CONFLICT` / `ON DUPLICATE KEY`）。
+    ///
+    /// MSSQL 不支持此语法（需改写为 `MERGE`），由 `MssqlBackend` override 拒绝。
+    fn supports_upsert(&self) -> bool {
+        true
+    }
+
     /// ON CONFLICT / UPSERT 子句。
     ///
     /// 后端若不支持（如 MSSQL，需走 `MERGE`），返回

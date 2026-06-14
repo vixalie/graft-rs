@@ -48,6 +48,11 @@ impl Backend for MssqlBackend {
         true
     }
 
+    fn supports_upsert(&self) -> bool {
+        // MSSQL 使用 MERGE，不支持 ON CONFLICT 语法
+        false
+    }
+
     fn on_conflict(
         &self,
         _columns: &[String],
