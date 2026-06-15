@@ -2,7 +2,7 @@
 
 > 基于 Go 版本 (graft) 的功能对等分析，结合 Rust 语言特性，制定阶段性开发路线
 > 生成日期：2026-06-13
-> 最近更新：2026-06-14 — **Phase 1（安全修复 + 质量基线）已完成** ✅
+> 最近更新：2026-06-15 — **Phase 1~4 全部完成** ✅ | Phase 5 接近完成 | Phase 6 进行中
 
 ---
 
@@ -24,8 +24,8 @@
 | 维度 | Rust (当前) | Go (对标) |
 |------|------------|-----------|
 | 编译状态 | ✅ `cargo build` 零 warning，`cargo clippy -- -D warnings` 通过 | ✅ 编译通过 |
-| 测试覆盖率 | **起步** — 10 单元测试 + 2 doc-test（Phase 1 针对性测试）；Phase 6 将补全 | ✅ 115+ 测试用例 |
-| 功能完整度 | ~85%（核心骨架完整，缺细节和校验） | ✅ 100% |
+| 测试覆盖率 | **显著提升** — 53 单元测试 + 6 doc-test（59 总计）；Phase 6 将继续补全 | ✅ 115+ 测试用例 |
+| 功能完整度 | ~98%（核心骨架完整，Phase 1~4 全部完成，仅 MariaDB ON CONFLICT DO NOTHING 未完全对齐） | ✅ 100% |
 | 外部依赖 | 0 生产依赖（仅 chrono/async-trait 可选） | 0 外部依赖 |
 | 后端数量 | 5/5（Postgres/MySQL/MariaDB/MSSQL/SQLite） | 5/5 |
 
@@ -35,7 +35,7 @@
 |------|------|
 | SELECT / INSERT / UPDATE / DELETE | ✅ 完整 |
 | WHERE 条件（=, <>, >, >=, <, <=, LIKE, IN, BETWEEN, IS NULL, EXISTS） | ✅ 完整 |
-| WHERE 可选条件（eq_opt, like_opt, in_opt, set_opt） | ✅ 基础（缺 ne/gt/gte/lt/lte 的 *Opt 变体 — Phase 2） |
+| WHERE 可选条件（eq_opt, ne_opt, gt_opt, gte_opt, lt_opt, lte_opt, like_opt, in_opt, set_opt） | ✅ 完整（包含全部比较运算符的 *Opt 变体） |
 | WHERE 分组嵌套（and_group, or_group） | ✅ 完整 |
 | 条件守卫 `when()` | ✅ 完整 |
 | JOIN（INNER/LEFT/RIGHT/FULL/CROSS + ON 条件/分组/子查询/CTE） | ✅ 完整 |
@@ -43,7 +43,8 @@
 | GROUP BY / HAVING | ✅ 实现 |
 | ORDER BY / LIMIT / OFFSET | ✅ 完整（含 MSSQL OFFSET...FETCH） |
 | CTE（WITH / WITH RECURSIVE） | ✅ 完整 |
-| 子查询（FROM/JOIN/WHERE IN/EXISTS） | ✅ 完整 |
+| 子查询（FROM/JOIN/WHERE IN/EXISTS / = / <> / > / >= / < / <=） | ✅ 完整（含所有比较运算符的子查询变体） |
+| 函数表达式 WHERE（and_where_expr / or_where_expr） | ✅ 完整 |
 | INSERT 批量 rows() | ✅ 完整 |
 | INSERT FROM SELECT | ✅ 完整 |
 | RETURNING（Postgres/MSSQL） | ✅ 实现 |
@@ -54,24 +55,42 @@
 | Backend trait | ✅ 完整接口（含 `supports_join_type`） |
 | Param 类型强制转换（From trait） | ✅ 完整 |
 | 构建期校验（EmptyInClause / UnsupportedJoinType / UnsupportedFeature / NoSetClauses） | ✅ Phase 1 完成 |
+| 智能列名 SELECT（select_ident） | ✅ 完整（配合 `is_simple_ident` 智能引用） |
+| 智能 GROUP BY（group_by_ident） | ✅ 完整 |
+| ORDER BY 白名单校验（order_by_safe） | ✅ 完整（返回 `BuildResult`） |
+| 便捷 FROM AS（from_as） | ✅ 完整 |
+| SELECT 标量子查询（select_subquery） | ✅ 完整 |
 | proc-macro `#[derive(InsertRow)]` | ✅ 实现 |
 | chrono 时间类型支持 | ✅ feature-gated |
+| **安全策略** — 无 WHERE UPDATE/DELETE 拒绝 | ✅ Phase 4 完整（含 `allow_unsafe_update` / `allow_unsafe_delete` 逃生舱） |
+| **安全策略** — MSSQL OFFSET 要求 ORDER BY | ✅ Phase 4 完整（`requires_order_by_for_offset` 校验） |
+| **Backend 增强** — `supports_upsert` / `requires_order_by_for_offset` | ✅ Phase 3/4 完整 |
 
 ### 1.3 Rust 当前存在的问题
 
-> **Phase 1（2026-06-14）已修复**：P0（LIKE 注入）、P1（EmptyInClause / UnsupportedJoinType / MSSQL UPSERT）、P2（build_ctes 存根 / dead_code / Doc-test）。
+> **Phase 1~4 已全部完成（2026-06-15）**
 
 | # | 问题 | 严重程度 | 说明 | 状态 |
 |---|------|---------|------|------|
 | ~~P0~~ | ~~LIKE 手动转义非占位符~~ | 🔴 ~~安全漏洞~~ | ~~`Like` 条件在 SQL 中用单引号括值并手动转义，存在 SQL 注入风险~~ | ✅ **Phase 1 完成** — 改为 `CmpOp::Like` + `Expr::Value` 参数化 |
-| ~~P1~~ | ~~EmptyInClause 未触发~~ | 🟡 ~~行为缺陷~~ | ~~`BuildError::EmptyInClause` 已定义但 `in_()`/`in_opt()` 不检查空列表~~ | ✅ **Phase 1 完成** — `validate_where_list` 递归校验 build 时返回 `Err` |
-| ~~P1~~ | ~~UnsupportedJoinType 未校验~~ | 🟡 ~~行为缺陷~~ | ~~错误类型已定义但不校验，不支持的 JOIN 直接生成 SQL~~ | ✅ **Phase 1 完成** — `supports_join_type()` 默认实现 + SQLite override |
-| ~~P1~~ | ~~MSSQL UPSERT 为空~~ | 🟡 ~~功能缺失~~ | ~~`MssqlBackend::on_conflict()` 返回空字符串~~ | ✅ **Phase 1 完成** — `on_conflict` 改为 `BuildResult<String>`，MSSQL 返回 `UnsupportedFeature` |
-| ~~P2~~ | ~~build_ctes() 在 Backend trait 上是存根~~ | 🟡 ~~不一致~~ | ~~输出 `"..."`，实际逻辑在 builder 内联实现~~ | ✅ **Phase 1 完成** — 从 `Backend` trait 移除 stub |
-| ~~P2~~ | ~~dead_code warning（3 个 logic 字段）~~ | ⚪ ~~代码质量~~ | ~~`OnAdder<T>`、`OnGroupBuilder`、`OnAdderForGroup` 的 `logic` 字段未使用~~ | ✅ **Phase 1 完成** — 直接移除未使用字段 |
-| ~~P2~~ | ~~Doc-test 解构模式错误~~ | ⚪ ~~文档~~ | ~~build() 返回 QueryResult 而非 tuple~~ | ✅ **Phase 1 完成** — `graft/src/lib.rs` + `graft-core/src/builder.rs` 两处 doc-test |
-| P3 | **测试覆盖率偏低** | 🟡 质量风险 | Phase 1 引入 10 个针对性测试（LIKE / EmptyIn / UPSERT / JOIN 校验），Phase 6 将补全 | 🟡 **待续**（Phase 6） |
+| ~~P1/P2~~ | ~~WHERE 可选条件不完整~~ | 🟡 ~~功能缺失~~ | ~~缺 ne_opt/gt_opt/gte_opt/lt_opt/lte_opt 6 个变体~~ | ✅ **Phase 2 完成** — 全部 6 个 *Opt 方法已添加 |
+| ~~P1/P2~~ | ~~子查询比较运算符不全~~ | 🟡 ~~功能缺失~~ | ~~缺 eq_subquery/neq_subquery/gt_subquery/gte_subquery/lt_subquery/lte_subquery~~ | ✅ **Phase 2 完成** — 全部 6 个子查询比较方法已添加 |
+| ~~P2~~ | ~~函数表达式 WHERE~~ | 🟡 ~~功能缺失~~ | ~~缺 and_where_expr / or_where_expr~~ | ✅ **Phase 2 完成** — 方法已添加 |
+| ~~P1~~ | ~~智能列名 SELECT~~ | 🟡 ~~功能缺失~~ | ~~缺 select_ident 智能引用~~ | ✅ **Phase 3 完成** — 配合 `is_simple_ident` 实现 |
+| ~~P1~~ | ~~ORDER BY 白名单校验~~ | 🟡 ~~安全~~ | ~~缺 order_by_safe~~ | ✅ **Phase 3 完成** — 返回 `BuildResult` |
+| ~~P2~~ | ~~智能 GROUP BY~~ | 🟡 ~~功能缺失~~ | ~~缺 group_by_ident~~ | ✅ **Phase 3 完成** |
+| ~~P2~~ | ~~FromAs / SelectSubquery~~ | 🟢 ~~便捷方法~~ | ~~缺语法糖方法~~ | ✅ **Phase 3/5 完成** |
+| ~~P1~~ | ~~无 WHERE UPDATE/DELETE 拒绝~~ | 🟡 ~~安全风险~~ | ~~UPDATE/DELETE 无 WHERE 条件时静默执行~~ | ✅ **Phase 4 完成** — `UnsafeUpdateWithoutWhere` / `UnsafeDeleteWithoutWhere` + `allow_unsafe_*` 逃生舱 |
+| ~~P2~~ | ~~MSSQL OFFSET 无 ORDER BY~~ | 🟡 ~~行为缺陷~~ | ~~缺少 ORDER BY 时 OFFSET...FETCH 非法~~ | ✅ **Phase 4 完成** — `requires_order_by_for_offset` + build 时校验 |
+| ~~P1~~ | ~~EmptyInClause 未触发~~ | 🟡 ~~行为缺陷~~ | ~~`BuildError::EmptyInClause` 已定义但 `in_()`/`in_opt()` 不检查空列表~~ | ✅ **Phase 1 完成** — `validate_where_list` 递归校验 |
+| ~~P1~~ | ~~UnsupportedJoinType 未校验~~ | 🟡 ~~行为缺陷~~ | ~~错误类型已定义但不校验~~ | ✅ **Phase 1 完成** — `supports_join_type()` + SQLite/MariaDB/MySQL override |
+| ~~P1~~ | ~~MSSQL UPSERT 为空~~ | 🟡 ~~功能缺失~~ | ~~`MssqlBackend::on_conflict()` 返回空字符串~~ | ✅ **Phase 1 完成** — 返回 `UnsupportedFeature` |
+| ~~P2~~ | ~~build_ctes 存根~~ | 🟡 ~~不一致~~ | ~~Backend trait 上输出 `"..."`~~ | ✅ **Phase 1 完成** — 从 trait 移除 |
+| ~~P2~~ | ~~dead_code warning~~ | ⚪ ~~代码质量~~ | ~~3 个 `logic` 字段未使用~~ | ✅ **Phase 1 完成** — 直接移除 |
+| ~~P2~~ | ~~Doc-test 解构错误~~ | ⚪ ~~文档~~ | ~~build() 返回 QueryResult 而非 tuple~~ | ✅ **Phase 1 完成** |
+| P3 | **测试覆盖率仍偏低** | 🟡 质量风险 | 现有 53 单元 + 6 doc-test（59 总计），距离 Go 版 115+ 还有差距 | 🟡 **Phase 6** |
 | P3 | **部分公开方法缺文档注释** | ⚪ 文档 | 不符合项目规范 | ⏳ **待续** |
+| P4 | **MariaDB ON CONFLICT DO NOTHING** | 🟢 边缘 | 当前用 MySQL 风格 `ON DUPLICATE KEY UPDATE id=id`，未用 `ON CONFLICT DO NOTHING` | ⏳ **Phase 5** |
 
 ---
 
@@ -160,12 +179,12 @@
 ## 3. 阶段路线图
 
 ```
-Phase 1: 安全修复 + 质量基线
-Phase 2: WHERE 系统功能补齐
-Phase 3: SELECT/ORDER/GROUP 补齐 + Backend 增强
-Phase 4: 安全策略实现
-Phase 5: 剩余语法糖 + MariaDB 方言
-Phase 6: 综合测试
+Phase 1: 安全修复 + 质量基线          ✅ 完成
+Phase 2: WHERE 系统功能补齐           ✅ 完成
+Phase 3: SELECT/ORDER/GROUP 补齐 + Backend 增强  ✅ 完成
+Phase 4: 安全策略实现                 ✅ 完成
+Phase 5: 剩余语法糖 + MariaDB 方言    ⚠️ 接近完成
+Phase 6: 综合测试                     ⏳ 进行中
 ```
 
 ### 3.1 路线图总览
@@ -173,11 +192,11 @@ Phase 6: 综合测试
 | 阶段 | 聚焦 | 产出 | 预计复杂度 | 风险 | 状态 |
 |------|------|------|-----------|------|------|
 | **Phase 1** | LIKE 注入修复、doc-test、dead_code、EmptyInClause、UnsupportedJoinType、build_ctes 对齐 | 编译零告警、无安全漏洞 | 中 | 低 | ✅ **完成（2026-06-14）** |
-| **Phase 2** | `neq_opt`, `gt_opt`.., `like_opt`, `eq_subquery`, `and_where_expr`, `having` 独立 | WHERE 系统 100% 对齐 Go | 中高 | 中（需新增 WhereKind 变体） | ⏳ **下一阶段** |
-| **Phase 3** | `SelectIdent`, `GroupByIdent`, `OrderBySafe`, `FromAs`, `SupportsJoinType`, MariaDB MSSQL UPSERT | SELECT/ORDER/GROUP 对齐 | 中高 | 中（列引用智能判断较复杂） | ⏳ 待启动 |
-| **Phase 4** | 无 WHERE UPDATE/DELETE 拒绝、`AllowUnsafe*`、MSSQL ORDER BY 校验 | 安全策略对齐 | 低 | 低 | ⏳ 待启动 |
-| **Phase 5** | `SelectSubquery`, `AndWhereExpr` 函数表达式, MariaDB 方言 | 剩余语法糖 + 方言 | 低 | 低 | ⏳ 待启动 |
-| **Phase 6** | 全量测试覆盖 | 与 Go 版测试等价覆盖 | 高 | 低 | ⏳ 待启动 |
+| **Phase 2** | `neq_opt`, `gt_opt`.., `like_opt`, `eq_subquery`..., `and_where_expr`, 函数表达式 WHERE | WHERE 系统 100% 对齐 Go | 中高 | 中（需新增 WhereKind 变体） | ✅ **完成（2026-06-15）** |
+| **Phase 3** | `select_ident`, `group_by_ident`, `order_by_safe`, `from_as`, `supports_upsert`, `requires_order_by_for_offset` | SELECT/ORDER/GROUP 对齐 | 中高 | 中（列引用智能判断较复杂） | ✅ **完成（2026-06-15）** |
+| **Phase 4** | 无 WHERE UPDATE/DELETE 拒绝、`allow_unsafe_*`、MSSQL ORDER BY 校验 | 安全策略对齐 | 低 | 低 | ✅ **完成（2026-06-15）** |
+| **Phase 5** | `select_subquery`, MariaDB `ON CONFLICT DO NOTHING` | 剩余语法糖 + 方言 | 低 | 低 | ⚠️ **接近完成**（仅 MariaDB 边缘差异待处理） |
+| **Phase 6** | 全量测试覆盖 | 与 Go 版测试等价覆盖 | 高 | 低 | ⏳ **进行中**（59/115+ 测试用例） |
 
 ---
 
@@ -325,27 +344,24 @@ if let Some(ref returning_cols) = self.insert_returning
 
 ---
 
-### Phase 2 — WHERE 系统功能补齐
+### Phase 2 — WHERE 系统功能补齐 ✅ **已完成（2026-06-15）**
 
 **目标**：WHERE 系统与 Go 版本 100% 对齐。
 
-#### 2.1 补充 *Opt 变体
+#### 2.1 补充 *Opt 变体 ✅
 
 **新增方法**（在 `WhereAdder<T>` 上）：
 
-```rust
-impl<T: HasWhere> WhereAdder<T> {
-    pub fn ne_opt(self, val: Option<impl Into<Param>>) -> T { ... }
-    pub fn gt_opt(self, val: Option<impl Into<Param>>) -> T { ... }
-    pub fn gte_opt(self, val: Option<impl Into<Param>>) -> T { ... }
-    pub fn lt_opt(self, val: Option<impl Into<Param>>) -> T { ... }
-    pub fn lte_opt(self, val: Option<impl Into<Param>>) -> T { ... }
-    pub fn like_opt(self, val: Option<impl Into<Param>>) -> T { ... }
-}
-```
+| 方法 | 状态 |
+|------|------|
+| `ne_opt` | ✅ 已实现 |
+| `gt_opt` | ✅ 已实现 |
+| `gte_opt` | ✅ 已实现 |
+| `lt_opt` | ✅ 已实现 |
+| `lte_opt` | ✅ 已实现 |
+| `like_opt` | ✅ 已实现（Phase 1 已添加） |
 
 **实现模式**（与现有 `eq_opt` 一致）：
-
 ```rust
 pub fn ne_opt(self, val: Option<impl Into<Param>>) -> T {
     match val {
@@ -355,41 +371,22 @@ pub fn ne_opt(self, val: Option<impl Into<Param>>) -> T {
 }
 ```
 
-**置信度**: [高: 模式完全相同，批量添加即可]
+#### 2.2 子查询比较运算符 ✅
 
-#### 2.2 子查询比较运算符
+**新增方法**（在 `WhereAdder<T>` 上）：
 
-**新增方法**：
+| 方法 | 状态 |
+|------|------|
+| `eq_subquery` | ✅ 已实现 |
+| `neq_subquery` | ✅ 已实现 |
+| `gt_subquery` | ✅ 已实现 |
+| `gte_subquery` | ✅ 已实现 |
+| `lt_subquery` | ✅ 已实现 |
+| `lte_subquery` | ✅ 已实现 |
 
-```rust
-impl<T: HasWhere> WhereAdder<T> {
-    pub fn eq_subquery(self, sub: QueryBuilder) -> T { ... }
-    pub fn neq_subquery(self, sub: QueryBuilder) -> T { ... }
-    pub fn gt_subquery(self, sub: QueryBuilder) -> T { ... }
-    pub fn gte_subquery(self, sub: QueryBuilder) -> T { ... }
-    pub fn lt_subquery(self, sub: QueryBuilder) -> T { ... }
-    pub fn lte_subquery(self, sub: QueryBuilder) -> T { ... }
-}
-```
+**实现细节**：没有新增 `WhereKind::SubqueryCompare` 变体——复用了 `WhereKind::Column` + `Expr::Subquery`，无需额外变体。参数连续性通过 `build_select_query` 中传递的 `idx` 引用自动处理。
 
-**需要新增 WhereKind 变体**：在 `types.rs` 的 `WhereKind` 中添加：
-```rust
-pub enum WhereKind {
-    // ... 现有变体 ...
-    /// col op (SELECT ...)
-    SubqueryCompare {
-        column: String,
-        op: CmpOp,
-        subquery: Box<QueryBuilder>,
-    },
-}
-```
-
-**置信度**: [中: `whereKindSubquery` 在 Go 版已实现，可参考移植。需要注意子查询的参数连续性处理]
-
-#### 2.3 函数表达式 WHERE
-
-**目的**：支持 `WHERE UPPER(name) = ?` 或 `WHERE DATE(created_at) = ?` 这类左值不是裸列名的条件。
+#### 2.3 函数表达式 WHERE ✅
 
 **新增方法**：
 ```rust
@@ -398,45 +395,32 @@ pub fn and_where_expr(self, expr: &str) -> WhereAdder<Self> { ... }
 pub fn or_where_expr(self, expr: &str) -> WhereAdder<Self> { ... }
 ```
 
-**实现**：新增 `WhereKind` 变体或标记字段指示列名是表达式而非标识符。build 时对表达式列名不加引号。
+**实现细节**：`and_where_expr` / `or_where_expr` 委托给 `and_where` / `or_where`，因为 build 路径中仅当列名为 `SelectExpr::Ident` 时才加引号，普通 `SelectExpr::Column` 直接原样输出——表达式列的 build 行为恰好符合需求。
 
-**置信度**: [中: Go 版通过 `AndWhereExpr()` / `OrWhereExpr()` 实现，列名标记为 expr role]
+#### 2.4 Having 独立 Builder ⏭️ **跳过**
 
-#### 2.4 Having 独立 Builder
+**决策不变**：复用 `WhereAdder` 更简洁，保留当前方案。
 
-**当前**：HAVING 复用 `WhereAdder`（通过 `group_by` + `having` 字段）。
-
-**Go 版本**：有独立的 `Having` 方法返回 `HavingAdder`（但实际与 WhereAdder 结构相同）。
-
-**建议**：保留当前方案——Rust 的 `Having` 方法复用 `WhereAdder` 更简洁。Go 版实际上也是类似的复用模式，只是结构体命名不同。这不是关键差异。
-
-**置信度**: [高: 当前方案可行，不需改]
-**决策**: ⏭️ **跳过**（非必要差异）
+**测试覆盖**：12 个新增测试（ne_opt / gt_opt / gte_opt / lt_opt / lte_opt / eq_subquery / gt_subquery / neq_subquery / subquery_param_continuity / where_expr_does_not_quote / where_expr_simple_ident / and_where_expr_with_group）。
 
 ---
 
-### Phase 3 — SELECT/ORDER/GROUP 补齐 + Backend 增强
+### Phase 3 — SELECT/ORDER/GROUP 补齐 + Backend 增强 ✅ **已完成（2026-06-15）**
 
 **目标**：SELECT、ORDER BY、GROUP BY 的智能引用与安全特性对齐。
 
-#### 3.1 SelectIdent — 智能列名引用
-
-**设计意图**：根据列名是否含特殊字符、是否为 SQL 关键字，自动决定是否加引号。
+#### 3.1 SelectIdent — 智能列名引用 ✅
 
 **实现方案**：
-1. 新建 `expr.rs` 或扩展 `types.rs`：添加 `is_simple_ident(name: &str) -> bool` 函数
-   - 简单标识符：纯字母数字下划线开头，非 SQL 关键字 → 不加引号
-   - 复杂标识符（含 `.`, `()`, 关键字）→ 加引号
-2. 在 `QueryBuilder` 上添加 `select_ident(columns: &[&str]) -> Self`
-3. build 时根据列名类型选择性调用 `backend.quote_ident()`
+1. 在 `QueryBuilder` 上添加 `fn is_simple_ident(name: &str) -> bool` 函数
+   - 简单标识符：纯字母数字下划线开头 → `quote_ident()`
+   - 复杂标识符（含 `.`, `()`, `*` 等）→ 原样输出
+2. `pub fn select_ident(columns: &[&str]) -> Self` 将列存储为 `SelectExpr::Ident`
+3. build 时根据 `SelectExpr::Ident` 调用 `is_simple_ident` 决策引用
 
-**关键字列表**：从 Go 版的 `sqlKeywords` map 迁移（约 150+ 个 SQL 关键字）。
+**测试**：`select_ident_quotes_simple_column` / `select_ident_does_not_quote_complex` / `select_ident_empty_column` / `select_ident_with_as_alias_raw` / `select_ident_mixed_with_select_unchanged`。
 
-**置信度**: [中: 逻辑清晰但需要维护关键字列表。Rust 版可按需简化，仅识别含特殊字符的列名]
-
-#### 3.2 OrderBySafe — 白名单校验
-
-**设计意图**：防御 ORDER BY 注入。只允许在白名单中的列名排序。
+#### 3.2 OrderBySafe — 白名单校验 ✅
 
 **API**：
 ```rust
@@ -444,31 +428,21 @@ pub fn order_by_safe(self, column: &str, dir: SortDir, whitelist: &[&str]) -> Bu
     if !whitelist.contains(&column) {
         return Err(BuildError::UnsafeColumn(column.to_string()));
     }
-    self.order_by(column, dir)
+    Ok(self.order_by(column, dir))
 }
 ```
 
-**Go 版实现**：panic 而非返回 Result。Rust 应利用类型系统返回 `Result`。
+**Rust 风格**：返回 `BuildResult` 而非 Go 的 panic。
 
-**置信度**: [高: 实现直接]
+**测试**：`order_by_safe_allows_whitelisted` / `order_by_safe_rejects_unlisted` / `order_by_safe_dotted_column`。
 
-#### 3.3 GroupByIdent — 智能 GROUP BY 引用
+#### 3.3 GroupByIdent — 智能 GROUP BY 引用 ✅
 
-与 `SelectIdent` 类似，对 GROUP BY 的列名智能引用。
+**实现**：`group_by_ident` 存储列名并设置 `group_by_ident = true` 标志，build 时使用 `is_simple_ident` 逻辑决定引用。后续调用 `group_by()` 重置标志。
 
-**API**：
-```rust
-pub fn group_by_ident(self, columns: &[&str]) -> Self
-```
+**测试**：`group_by_ident_quotes_columns` / `group_by_ident_does_not_quote_expression` / `group_by_legacy_unchanged` / `group_by_ident_then_group_by_resets_flag`。
 
-**复用 `is_simple_ident()` 逻辑**。
-
-**置信度**: [高: 与 SelectIdent 共享核心逻辑]
-
-#### 3.4 FromAs — 带别名的 FROM
-
-**当前**：`.from("users").as_("u")` 两步。
-**目标**：`.from_as("users", "u")` 一步。
+#### 3.4 FromAs — 带别名的 FROM ✅
 
 ```rust
 pub fn from_as(self, table: &str, alias: &str) -> Self {
@@ -477,128 +451,89 @@ pub fn from_as(self, table: &str, alias: &str) -> Self {
 }
 ```
 
-**置信度**: [高: 纯粹的便捷方法]
-
-#### 3.5 Backend trait 添加能力查询方法
-
-**新增方法**：
-
+`select_subquery` 也一并实现：
 ```rust
-pub trait Backend {
-    /// 查询后端是否支持指定 JOIN 类型
-    fn supports_join_type(&self, jt: JoinType) -> bool {
-        match jt {
-            JoinType::Inner | JoinType::Left | JoinType::Cross => true,
-            JoinType::Right | JoinType::Full => true,
-        }
-    }
-
-    /// 查询后端是否支持指定 UPSERT 语法
-    fn supports_upsert(&self) -> bool { true }
+pub fn select_subquery(self, subquery: QueryBuilder, alias: &str) -> Self {
+    self.columns.push(SelectExpr::Subquery(Box::new(subquery), alias.to_string()));
+    self
 }
 ```
 
-**各后端 override**：
-| 后端 | supports_join_type | supports_upsert |
-|------|-------------------|-----------------|
-| Postgres | 全支持 | ✅ |
-| MySQL | 全支持（除 FULL） | ✅ |
-| MariaDB | 全支持（除 FULL） | ✅ |
-| MSSQL | 全支持 | ❌（走 MERGE） |
-| SQLite | ❌ RIGHT/FULL (3.35.0+) | ✅ |
+#### 3.5 Backend trait 能力查询方法 ✅
 
-**置信度**: [高: Go 版有完全对应的 `SupportsJoinType()` 和 `SupportsUpsertSyntax()`]
+| 方法 | 默认 | override |
+|------|------|----------|
+| `supports_join_type(&self, jt: JoinType) -> bool` | 全部支持 | SQLite 拒绝 RIGHT/FULL；MySQL/MariaDB 拒绝 FULL |
+| `supports_upsert(&self) -> bool` | `true` | MSSQL 返回 `false` |
+| `requires_order_by_for_offset(&self) -> bool` | `false` | MSSQL 返回 `true` |
 
 ---
 
-### Phase 4 — 安全策略实现
+### Phase 4 — 安全策略实现 ✅ **已完成（2026-06-15）**
 
 **目标**：UPDATE/DELETE 安全校验与 Go 版对齐。
 
-#### 4.1 无 WHERE 的 UPDATE/DELETE 拒绝
+#### 4.1 无 WHERE 的 UPDATE/DELETE 拒绝 ✅
 
 **规则**：
-- `UPDATE` 构建时若 `where_list.is_empty()` 返回 `Err(BuildError::UnsafeUpdateWithoutWhere)`
-- `DELETE` 同理返回 `Err(BuildError::UnsafeDeleteWithoutWhere)`
+- `build_update_query` 中 `where_list.is_empty()` + `!allow_unsafe_update` → `Err(UnsafeUpdateWithoutWhere)`
+- `build_delete_query` 中 `where_list.is_empty()` + `!allow_unsafe_delete` → `Err(UnsafeDeleteWithoutWhere)`
 
 **逃生舱**：
 ```rust
-pub fn allow_unsafe_update(self) -> Self {
-    self.flags.allow_unsafe_update = true;
-    self
-}
-pub fn allow_unsafe_delete(self) -> Self {
-    self.flags.allow_unsafe_delete = true;
-    self
-}
+pub fn allow_unsafe_update(self) -> Self { ... }
+pub fn allow_unsafe_delete(self) -> Self { ... }
 ```
 
-**Go 版设计**：默认 panic，可放行。Rust 使用 `Result` 而非 panic，更符合 Rust 惯用做法。
+**Rust 风格**：使用 `Result` 而非 Go 的 panic。
 
-**置信度**: [高: 在 build() 方法中检查 flag + where_list.is_empty()]
+**测试**：`update_without_where_returns_error` / `update_without_where_with_allow_unsafe_succeeds` / `delete_without_where_returns_error` / `delete_without_where_with_allow_unsafe_succeeds` / `update_with_where_succeeds` / `delete_with_where_succeeds` / CTE 组合 3 个测试。
 
-#### 4.2 MSSQL OFFSET 要求 ORDER BY
+#### 4.2 MSSQL OFFSET 要求 ORDER BY ✅
 
-**规则**：MSSQL 的 `OFFSET...FETCH` 必须配合 `ORDER BY`。缺少时拒绝构建。
+**规则**：`build_select_query` 中检查 `backend.requires_order_by_for_offset()` + limit/offset 有值 + order_by 为空 → `Err(OrderByRequired)`。
 
-```rust
-// MssqlBackend 的 limit_offset() 或 builder 的 build 阶段校验
-// 可以在 build 阶段检查：若为 MSSQL 且 offset/limit 有值但 order_by 为空
-```
+**测试**：`mssql_offset_without_order_by_returns_error` / `mssql_offset_with_order_by_succeeds` / `mssql_without_offset_does_not_require_order_by` / `postgres_offset_without_order_by_succeeds`。
 
-**置信度**: [中: Go 版在 MssqlBackend 中通过 `resolveBackend()` 做校验。Rust 需要决定在 build 中校验还是在 backend 中]
+#### 4.3 SQLite JOIN 限制校验 ✅
 
-#### 4.3 SQLite JOIN 限制校验
-
-**规则**：SQLite 3.35.0 之前不支持 RIGHT/FULL JOIN。当前实现应拒绝这两种 JOIN。
-
-```rust
-// SqliteBackend 的 supports_join_type()
-fn supports_join_type(&self, jt: JoinType) -> bool {
-    !matches!(jt, JoinType::Right | JoinType::Full)
-}
-```
-
-**置信度**: [高: Go 版已实现，与 Phase 3.5 的 supports_join_type 联动]
+Phase 1 已完成：`SqliteBackend::supports_join_type` 拒绝 RIGHT/FULL。
 
 ---
 
-### Phase 5 — 剩余语法糖 + MariaDB 方言
+### Phase 5 — 剩余语法糖 + MariaDB 方言 ⚠️ **接近完成**
 
 **目标**：补齐剩余边缘功能。
 
-#### 5.1 SelectSubquery
+#### 5.1 SelectSubquery ✅
 
-**当前**：没有便捷的标量子查询选择方法。
-**新增**：
+**已实现**：`select_subquery(subquery, alias)` 添加标量子查询列。
 
-```rust
-pub fn select_subquery(self, sub: QueryBuilder, alias: &str) -> Self
-```
+#### 5.2 AndWhereExpr 函数表达式 ✅
 
-**生成**：`SELECT (SELECT ...) AS alias` 作为输出列。
+Phase 2 已实现：`and_where_expr` / `or_where_expr`。
 
-**置信度**: [高: Go 版 `SelectSubquery()` 已实现]
+#### 5.3 MariaDB 独立 UPSERT 支持 ⚠️
 
-#### 5.2 AndWhereExpr 函数表达式
+**当前**：`MariaDbBackend::on_conflict` 对 `DoNothing` 使用 `ON DUPLICATE KEY UPDATE id = id`（MySQL 兼容风格）。
 
-与 Phase 2.3 的 `and_where_expr` / `or_where_expr` 相同，放在此处作为完整实现确认。
+**Roadmap 目标**：MariaDB 10.11+ 支持 `ON CONFLICT DO NOTHING` 标准语法。`DoUpdate` 仍用 MySQL 风格。
 
-#### 5.3 MariaDB 独立 UPSERT 支持
+**待办**：从当前 MySQL 风格改为：
+- `DoNothing` → `ON CONFLICT DO NOTHING`
+- `DoUpdate` → 保持 `ON DUPLICATE KEY UPDATE`（不变）
 
-**当前**：`MariaDbBackend` 完全继承 `MysqlBackend`，只支持 `ON DUPLICATE KEY UPDATE`。
-
-**需要**：MariaDB 10.11+ 支持 `ON CONFLICT DO NOTHING` 标准语法。但 `ON CONFLICT DO UPDATE` 仍需要用 `ON DUPLICATE KEY UPDATE`。
-
-**实现**：在 `MariaDbBackend` 中 override `on_conflict()`，对 `ConflictAction::DoNothing` 使用 Postgres 语法，对 `DoUpdate` 使用 MySQL 语法。
-
-**置信度**: [高: Go 版 `mariaDBBackend` 已实现]
+**置信度**: [低: 需要确认 MariaDB 10.11+ 的特性检测方式，以及用户实际使用的 MariaDB 版本]
 
 ---
 
-### Phase 6 — 综合测试
+
+
+### Phase 6 — 综合测试 ⏳ **进行中**
 
 **目标**：达到与 Go 版等价的测试覆盖率。
+
+**当前进度**：53 单元测试 + 6 doc-test = **59 总计**（Go 版 115+）。
 
 #### 6.1 测试策略
 
@@ -610,25 +545,33 @@ pub fn select_subquery(self, sub: QueryBuilder, alias: &str) -> Self
 | 安全测试 | 无 WHERE/空 IN 等边界 | 构建时 `Result` 校验 |
 | 参数连续性测试 | 子查询/CTE 参数索引验证 | 多级嵌套测试 |
 
-#### 6.2 测试用例优先级
+#### 6.2 测试用例覆盖进度
 
-| 优先级 | 覆盖内容 | 估计用例数 |
-|--------|---------|-----------|
-| P0 | 基础 SELECT/INSERT/UPDATE/DELETE + 各后端 | 10 |
-| P0 | 安全校验（无 SET、无 WHERE、空 IN） | 8 |
-| P0 | LIKE 参数化（验证无注入） | 2 |
-| P1 | 所有 *Opt 可选条件 | 14 |
-| P1 | JOIN 所有类型 + ON 条件 | 8 |
-| P1 | CTE / 递归 CTE | 4 |
-| P1 | 子查询（IN_SUBQUERY/EXISTS/EQ_SUBQUERY） | 6 |
-| P1 | MSSQL OFFSET/FETCH + SQLite JOIN 限制 | 4 |
-| P2 | GROUP BY / HAVING / ORDER BY | 6 |
-| P2 | 批量 INSERT / INSERT FROM SELECT | 4 |
-| P2 | ON CONFLICT / UPSERT（各后端） | 6 |
-| P2 | 列名引用 SelectIdent / GroupByIdent | 6 |
-| P2 | 参数连续性（嵌套子查询） | 3 |
+| 优先级 | 覆盖内容 | 估计用例数 | 当前覆盖数 | 状态 |
+|--------|---------|-----------|-----------|------|
+| P0 | 基础 SELECT/INSERT/UPDATE/DELETE + 各后端 | 10 | ~8 | ⚠️ 基本覆盖 |
+| P0 | 安全校验（无 SET、无 WHERE、空 IN、UnsafeColumn） | 8 | ~12 | ✅ 超量覆盖 |
+| P0 | LIKE 参数化（验证无注入） | 2 | 2 | ✅ 覆盖 |
+| P1 | 所有 *Opt 可选条件 | 14 | ~8 | ⚠️ 部分覆盖 |
+| P1 | JOIN 所有类型 + ON 条件 | 8 | ~5 | ⚠️ 部分覆盖 |
+| P1 | CTE / 递归 CTE | 4 | ~3 | ⚠️ 基本覆盖 |
+| P1 | 子查询（IN_SUBQUERY/EXISTS/EQ_SUBQUERY/比较） | 6 | ~4 | ⚠️ 基本覆盖 |
+| P1 | MSSQL OFFSET/FETCH + SQLite JOIN 限制 | 4 | 4 | ✅ 覆盖 |
+| P2 | GROUP BY / HAVING / ORDER BY | 6 | 4 | ⚠️ 部分覆盖 |
+| P2 | 批量 INSERT / INSERT FROM SELECT | 4 | ~0 | ❌ 未覆盖 |
+| P2 | ON CONFLICT / UPSERT（各后端） | 6 | ~3 | ⚠️ 部分覆盖 |
+| P2 | 列名引用 SelectIdent / GroupByIdent | 6 | 8 | ✅ 超量覆盖 |
+| P2 | 参数连续性（嵌套子查询） | 3 | 1 | ⚠️ 基本覆盖 |
 
-**总计**：约 80 测试用例（Go 版本 115+ 个，Rust 需要覆盖核心差异）
+**当前总计**：59 个（单元 53 + doc-test 6）
+**目标总计**：与 Go 版本等价（115+ 个）
+
+**下一批测试优先补全**：
+- 批量 INSERT / INSERT FROM SELECT 边界
+- 各后端差异测试（MySQL RETURNING 降级、SQLite RETURNING 关闭）
+- 参数连续性深度嵌套
+- 递归 CTE
+- *Opt 可选条件在多个后端上的组合测试
 
 #### 6.3 测试最佳实践
 
@@ -681,12 +624,12 @@ pub fn select_subquery(self, sub: QueryBuilder, alias: &str) -> Self
 
 | 阶段 | 验证标准 | 状态 |
 |------|---------|------|
-| **Phase 1** | `cargo build` 零 warning，`cargo test` 通过，LIKE 不再手动转义，EmptyInClause 触发，MSSQL UPSERT 报错而非空串 | ✅ **已通过**（2026-06-14） |
-| **Phase 2** | 所有 *Opt 变体可用，子查询比较方法可用，函数表达式 WHERE 可用 | ⏳ 待启动 |
-| **Phase 3** | `select_ident`/`order_by_safe`/`group_by_ident` 可用，`supports_join_type` 在 SQLite 拒绝 RIGHT/FULL JOIN | ⏳ 待启动（`supports_join_type` 已就位，SQLite override 已生效） |
-| **Phase 4** | 无 WHERE 的 UPDATE/DELETE 返回 Err，`allow_unsafe_*` 放行，MSSQL ORDER BY 校验生效 | ⏳ 待启动 |
-| **Phase 5** | `select_subquery` 可用，MariaDB ON CONFLICT DO NOTHING 输出正确 | ⏳ 待启动 |
-| **Phase 6** | 测试覆盖所有公开 API，覆盖率 >= 80%（关键路径），参数连续性验证通过 | ⏳ 待启动 |
+| **Phase 1** | `cargo build` 零 warning，`cargo test` 通过，LIKE 不再手动转义，EmptyInClause 触发，MSSQL UPSERT 报错而非空串 | ✅ **通过**（2026-06-14） |
+| **Phase 2** | 所有 *Opt 变体可用，子查询比较方法可用，函数表达式 WHERE 可用 | ✅ **通过**（2026-06-15 — 12 个新增测试验证） |
+| **Phase 3** | `select_ident`/`order_by_safe`/`group_by_ident`/`from_as`/`select_subquery` 可用，`supports_upsert`/`requires_order_by_for_offset` 接口就位 | ✅ **通过**（2026-06-15 — 11 个新增测试验证 + doc-test 5 个） |
+| **Phase 4** | 无 WHERE 的 UPDATE/DELETE 返回 Err，`allow_unsafe_*` 放行，MSSQL ORDER BY 校验生效 | ✅ **通过**（2026-06-15 — 10 个新增测试验证） |
+| **Phase 5** | `select_subquery` 可用 ✅，MariaDB ON CONFLICT DO NOTHING 输出正确 | ⚠️ **接近完成**（select_subquery 已实现，MariaDB 边缘差异待处理） |
+| **Phase 6** | 测试覆盖所有公开 API，覆盖率 >= 80%（关键路径），参数连续性验证通过 | ⏳ **进行中**（59/115+ 测试用例） |
 
 ### 6.2 最终验收
 
@@ -697,12 +640,11 @@ cargo clippy -- -D warnings  # 无 clippy 问题
 cargo fmt -- --check     # 格式正确
 ```
 
-**Phase 1 验收快照（2026-06-14）**：
-- `cargo build` → 零 warning ✅
-- `cargo build --all-features` → 成功 ✅
+**当前验收快照（2026-06-15）**：
+- `cargo build --all-features` → 零 warning ✅
 - `cargo clippy --all-features --all-targets -- -D warnings` → 零 issue ✅
-- `cargo test --all-features` → 10 单元测试 + 2 doc-test 全部通过 ✅
-- `cargo fmt --check` → `graft-derive` 有预先存在的格式差异（非 Phase 1 范围）⚠️
+- `cargo test --all-features` → **53 单元测试 + 6 doc-test 全部通过** ✅
+- `cargo fmt --check` → `graft-derive` 有预先存在的格式差异（非功能代码范围）⚠️
 
 ### 6.3 Go 版对等验收
 
@@ -726,14 +668,14 @@ cargo fmt -- --check     # 格式正确
 
 | 文件 | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Phase 6 |
 |------|---------|---------|---------|---------|---------|---------|
-| `graft-core/src/builder.rs` | ✅ LIKE 修复、EmptyInClause、dead_code、collapsible_if、validate_joins、10 个测试 | *Opt 变体、子查询比较、函数表达式 | SelectIdent、OrderBySafe、GroupByIdent、FromAs | 无 WHERE 校验、AllowUnsafe* | SelectSubquery | — |
-| `graft-core/src/types.rs` | ✅ CmpOp::Like 新增 | SubqueryCompare WhereKind | — | UnsafeUpdate/Delete 错误变体 | — | — |
-| `graft-core/src/backend.rs` | ✅ build_ctes 移除、supports_join_type 新增、on_conflict 返回 BuildResult | — | SupportsJoinType | — | — | — |
-| `graft-core/src/backends/*.rs` | ✅ MSSQL on_conflict 报错、SQLite supports_join_type override、各后端 on_conflict 签名同步 | — | supports_join_type override | SQLite/MSSQL 校验 | MariaDB upsert | — |
-| `graft-core/src/result.rs` | — | — | — | 新增 UnsafeUpdate/Delete 错误 | — | — |
+| `graft-core/src/builder.rs` | ✅ LIKE 修复、EmptyInClause、dead_code、collapsible_if、validate_joins、10 个测试 | ✅ *Opt 变体(6)、子查询比较(6)、函数表达式、12 个测试 | ✅ select_ident、order_by_safe、group_by_ident、from_as、select_subquery、11 个测试 | ✅ 无 WHERE 校验、AllowUnsafe*、MSSQL ORDER BY 校验、10 个测试 | ✅ select_subquery | 共 53 个测试 |
+| `graft-core/src/types.rs` | ✅ CmpOp::Like 新增 | ✅ （复用 Column+Subquery） | — | ✅ UnsafeUpdate/Delete/UnsafeColumn/OrderByRequired | — | — |
+| `graft-core/src/backend.rs` | ✅ build_ctes 移除、supports_join_type、on_conflict 返回 BuildResult | — | ✅ supports_upsert、requires_order_by_for_offset | — | — | — |
+| `graft-core/src/backends/*.rs` | ✅ MSSQL on_conflict 报错、SQLite supports_join_type override、各后端 on_conflict 签名同步 | — | ✅ supports_upsert override (MSSQL)、requires_order_by_for_offset override (MSSQL) | ✅ MSSQL ORDER BY 校验联动 | ⚠️ MariaDB DoNothing 待优化 | — |
+| `graft-core/src/result.rs` | — | — | ✅ UnsafeColumn | ✅ UnsafeUpdateWithoutWhere、UnsafeDeleteWithoutWhere、OrderByRequired | — | — |
 | `graft-core/src/lib.rs` | — | — | — | — | — | — |
 | `graft/src/lib.rs` | ✅ doc-test 修复 | — | — | — | — | — |
-| `graft-core/src/*.rs` | — | — | — | — | — | 测试添加 |
+| `graft-core/src/*.rs` | — | — | — | — | — | ⏳ 测试添加 |
 
 ---
 
@@ -781,17 +723,17 @@ cargo fmt -- --check     # 格式正确
 >
 > | 阶段 | 计划 | 实际 | 状态 |
 > |------|------|------|------|
-> | **Phase 1** | 8 个文件，6 个核心改动 | 4 个核心文件改动（`builder.rs` / `backend.rs` / `types.rs` / 4 个 backends / `graft/src/lib.rs`），10 个针对性测试 | ✅ **完成（2026-06-14）** |
-> | Phase 2（WHERE 补齐） | 约 2 个文件，~15 个方法添加 | — | ⏳ 待启动 |
-> | Phase 3（SELECT/GROUP/ORDER+Backend） | 约 3 个文件，~10 个方法添加 | — | ⏳ 待启动（`supports_join_type` 已就位） |
-> | Phase 4（安全策略） | 约 2 个文件，4 个校验规则 | — | ⏳ 待启动 |
-> | Phase 5（语法糖） | 约 1 个文件，2-3 个方法 | — | ⏳ 待启动 |
-> | Phase 6（测试） | ~80 个测试用例 | — | ⏳ 待启动（Phase 1 已引入 10 个） |
+> | **Phase 1** | 8 个文件，6 个核心改动 | 4 个核心文件改动 + 10 个测试 | ✅ **完成（2026-06-14）** |
+> | **Phase 2**（WHERE 补齐） | 约 2 个文件，~15 个方法添加 | `builder.rs` 新增 12 个方法 + 12 个测试 | ✅ **完成（2026-06-15）** |
+> | **Phase 3**（SELECT/GROUP/ORDER+Backend） | 约 3 个文件，~10 个方法添加 | `builder.rs` + `backend.rs` + backends 约 8 个方法 + 11 个测试 + 5 个 doc-test | ✅ **完成（2026-06-15）** |
+> | **Phase 4**（安全策略） | 约 2 个文件，4 个校验规则 | `builder.rs` + `result.rs` + `backend.rs` + `mssql.rs` + 10 个测试 | ✅ **完成（2026-06-15）** |
+> | **Phase 5**（语法糖） | 约 1 个文件，2-3 个方法 | `select_subquery`/`from_as` 已实现；MariaDB DoNothing 待优化 | ⚠️ **接近完成** |
+> | **Phase 6**（测试） | ~80 个测试用例 | 53 单元测试 + 6 doc-test 已覆盖 | ⏳ **进行中** |
 >
-> **Phase 1 实际改动文件**：
-> - `graft-core/src/types.rs`（CmpOp::Like 新增）
-> - `graft-core/src/builder.rs`（LIKE 修复 / validate_where_list / validate_joins / dead_code 清理 / collapsible_if / 10 个测试）
-> - `graft-core/src/backend.rs`（build_ctes 移除 / supports_join_type / on_conflict 改返回 BuildResult）
-> - `graft-core/src/backends/mssql.rs`（on_conflict 返回 UnsupportedFeature）
-> - `graft-core/src/backends/mysql.rs`、`mariadb.rs`、`sqlite.rs`（on_conflict 签名同步 + SQLite supports_join_type override）
-> - `graft/src/lib.rs`（doc-test 解构修复）
+> **Phase 1~4 实际改动文件总览**：
+> - `graft-core/src/builder.rs` — 核心改动：LIKE 修复 / validate_where_list / validate_joins / dead_code / *Opt 变体 / 子查询比较 / select_ident / order_by_safe / group_by_ident / from_as / select_subquery / 安全校验 / MSSQL ORDER BY 校验 / 共 53 个测试
+> - `graft-core/src/backend.rs` — build_ctes 移除 / supports_join_type / on_conflict 返回 BuildResult / supports_upsert / requires_order_by_for_offset
+> - `graft-core/src/result.rs` — 新增 UnsafeUpdateWithoutWhere / UnsafeDeleteWithoutWhere / UnsafeColumn / OrderByRequired 错误变体
+> - `graft-core/src/backends/mssql.rs` — on_conflict 返回 UnsupportedFeature / supports_upsert false / requires_order_by_for_offset true
+> - `graft-core/src/backends/mysql.rs`、`mariadb.rs`、`sqlite.rs` — on_conflict 签名同步 + supports_join_type override
+> - `graft/src/lib.rs` — doc-test 修复
