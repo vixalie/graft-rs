@@ -53,6 +53,11 @@ impl Backend for MssqlBackend {
         false
     }
 
+    fn requires_order_by_for_offset(&self) -> bool {
+        // MSSQL 的 OFFSET...FETCH 语法强制要求 ORDER BY
+        true
+    }
+
     fn on_conflict(
         &self,
         _columns: &[String],

@@ -56,6 +56,14 @@ pub trait Backend {
         true
     }
 
+    /// OFFSET/FETCH 是否需要 ORDER BY？
+    ///
+    /// MSSQL 语法强制要求（`OFFSET x ROWS FETCH NEXT y ROWS ONLY` 必须配合 `ORDER BY`），
+    /// 由 `MssqlBackend` override 返回 `true`。其他后端默认 `false`。
+    fn requires_order_by_for_offset(&self) -> bool {
+        false
+    }
+
     /// ON CONFLICT / UPSERT 子句。
     ///
     /// 后端若不支持（如 MSSQL，需走 `MERGE`），返回

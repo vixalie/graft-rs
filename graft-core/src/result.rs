@@ -49,6 +49,12 @@ pub enum BuildError {
     ModeMismatch(String),
     /// ORDER BY 或类似上下文中使用了不在白名单内的列名
     UnsafeColumn(String),
+    /// UPDATE 没有 WHERE 条件（默认拒绝，除非 allow_unsafe_update）
+    UnsafeUpdateWithoutWhere,
+    /// DELETE 没有 WHERE 条件（默认拒绝，除非 allow_unsafe_delete）
+    UnsafeDeleteWithoutWhere,
+    /// OFFSET/FETCH 需要 ORDER BY（MSSQL 语法要求）
+    OrderByRequired,
 }
 
 impl std::fmt::Display for BuildError {
@@ -64,6 +70,18 @@ impl std::fmt::Display for BuildError {
                 write!(f, "operation not valid for current query mode: {m}")
             }
             BuildError::UnsafeColumn(col) => write!(f, "column not in whitelist: {col}"),
+            BuildError::UnsafeUpdateWithoutWhere => write!(
+                f,
+                "UPDATE without WHERE is not allowed; use allow_unsafe_update() to bypass"
+            ),
+            BuildError::UnsafeDeleteWithoutWhere => write!(
+                f,
+                "DELETE without WHERE is not allowed; use allow_unsafe_delete() to bypass"
+            ),
+            BuildError::OrderByRequired => write!(
+                f,
+                "OFFSET/FETCH requires ORDER BY; add .order_by(column, dir) before .limit()/.offset()"
+            ),
         }
     }
 }

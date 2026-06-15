@@ -55,6 +55,10 @@ pub struct QueryBuilder {
 
     // ── CTE ──
     pub(crate) ctes: Vec<CteNode>,
+
+    // ── 安全策略 ──
+    pub(crate) allow_unsafe_update: bool,
+    pub(crate) allow_unsafe_delete: bool,
 }
 
 /// SELECT 列表达式 —— 支持 `"col"` 或 `"expr AS alias"`。
@@ -100,6 +104,8 @@ impl QueryBuilder {
             delete_table: None,
             delete_returning: None,
             ctes: vec![],
+            allow_unsafe_update: false,
+            allow_unsafe_delete: false,
         }
     }
 
@@ -598,6 +604,24 @@ impl QueryBuilder {
         self
     }
 
+    /// 放行无 WHERE 的 UPDATE（默认拒绝）。
+    ///
+    /// 默认情况下 `UPDATE` 必须有 WHERE 条件，否则返回 `UnsafeUpdateWithoutWhere`。
+    /// 此方法显式放行，将所有行纳入更新范围。
+    pub fn allow_unsafe_update(mut self) -> Self {
+        self.allow_unsafe_update = true;
+        self
+    }
+
+    /// 放行无 WHERE 的 DELETE（默认拒绝）。
+    ///
+    /// 默认情况下 `DELETE` 必须有 WHERE 条件，否则返回 `UnsafeDeleteWithoutWhere`。
+    /// 此方法显式放行，删除表中所有行。
+    pub fn allow_unsafe_delete(mut self) -> Self {
+        self.allow_unsafe_delete = true;
+        self
+    }
+
     // ═══════════════════════════════════════════
     // CTE
     // ═══════════════════════════════════════════
@@ -683,6 +707,13 @@ impl QueryBuilder {
         self.validate_where_list(&self.where_list)?;
         self.validate_where_list(&self.having)?;
         self.validate_joins(backend)?;
+
+        if backend.requires_order_by_for_offset()
+            && (self.limit.is_some() || self.offset.is_some())
+            && self.order_by.is_empty()
+        {
+            return Err(BuildError::OrderByRequired);
+        }
         let mut sql = String::new();
         let mut all_params = vec![];
 
@@ -897,6 +928,11 @@ impl QueryBuilder {
         if self.set_list.is_empty() {
             return Err(BuildError::NoSetClauses);
         }
+
+        if self.where_list.is_empty() && !self.allow_unsafe_update {
+            return Err(BuildError::UnsafeUpdateWithoutWhere);
+        }
+
         self.validate_where_list(&self.where_list)?;
 
         let table = self
@@ -955,14 +991,26 @@ impl QueryBuilder {
         idx: &mut usize,
     ) -> BuildResult<(String, Vec<Param>)> {
         use std::fmt::Write;
+        if self.where_list.is_empty() && !self.allow_unsafe_delete {
+            return Err(BuildError::UnsafeDeleteWithoutWhere);
+        }
+
+        self.validate_where_list(&self.where_list)?;
+
         let table = self
             .delete_table
             .as_deref()
             .ok_or_else(|| BuildError::ModeMismatch("DELETE requires a table".to_string()))?;
-        self.validate_where_list(&self.where_list)?;
 
         let mut sql = String::new();
         let mut all_params = vec![];
+
+        // CTE
+        if !self.ctes.is_empty() {
+            let (cte_sql, cte_params) = self.build_ctes_inner(backend, idx);
+            sql.push_str(&cte_sql);
+            all_params.extend(cte_params);
+        }
 
         write!(sql, "DELETE FROM {}", backend.quote_ident(table)).unwrap();
 
@@ -2849,5 +2897,197 @@ mod tests {
             .unwrap();
 
         assert!(result.sql.contains("INNER JOIN"));
+    }
+
+    // ============================================================
+    // Phase 4 — 无 WHERE UPDATE/DELETE 安全校验
+    // ============================================================
+
+    /// 验证 UPDATE 无 WHERE 返回 UnsafeUpdateWithoutWhere。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn update_without_where_returns_error() {
+        let result = QueryBuilder::update("users")
+            .update_set("name", "bob")
+            .build(&PostgresBackend);
+
+        assert!(matches!(result, Err(BuildError::UnsafeUpdateWithoutWhere)));
+    }
+
+    /// 验证 UPDATE 无 WHERE + allow_unsafe_update 放行。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn update_without_where_with_allow_unsafe_succeeds() {
+        let result = QueryBuilder::update("users")
+            .update_set("name", "bob")
+            .allow_unsafe_update()
+            .build(&PostgresBackend);
+
+        let qr = result.expect("allow_unsafe_update should bypass safety check");
+        assert!(qr.sql.contains("UPDATE"));
+        assert!(!qr.sql.contains("WHERE"));
+    }
+
+    /// 验证 DELETE 无 WHERE 返回 UnsafeDeleteWithoutWhere。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn delete_without_where_returns_error() {
+        let result = QueryBuilder::delete_from("users").build(&PostgresBackend);
+
+        assert!(matches!(result, Err(BuildError::UnsafeDeleteWithoutWhere)));
+    }
+
+    /// 验证 DELETE 无 WHERE + allow_unsafe_delete 放行。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn delete_without_where_with_allow_unsafe_succeeds() {
+        let result = QueryBuilder::delete_from("users")
+            .allow_unsafe_delete()
+            .build(&PostgresBackend);
+
+        let qr = result.expect("allow_unsafe_delete should bypass safety check");
+        assert!(qr.sql.contains("DELETE"));
+        assert!(!qr.sql.contains("WHERE"));
+    }
+
+    /// 验证 UPDATE 有 WHERE 正常（回归测试）。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn update_with_where_succeeds() {
+        let result = QueryBuilder::update("users")
+            .update_set("name", "bob")
+            .and_where("id")
+            .eq(1)
+            .build(&PostgresBackend);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().sql.contains("WHERE"));
+    }
+
+    /// 验证 DELETE 有 WHERE 正常（回归测试）。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn delete_with_where_succeeds() {
+        let result = QueryBuilder::delete_from("users")
+            .and_where("id")
+            .eq(1)
+            .build(&PostgresBackend);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().sql.contains("WHERE"));
+    }
+
+    // ============================================================
+    // Phase 4 — CTE + UPDATE/DELETE 场景
+    // ============================================================
+
+    /// 验证 CTE + 无 WHERE UPDATE + allow_unsafe_update 放行。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn cte_update_without_where_with_allow_unsafe_succeeds() {
+        let cte = QueryBuilder::select(&["id"]).from("archived_users");
+        let result = QueryBuilder::update("users")
+            .with_cte("archived", cte)
+            .update_set("status", "archived")
+            .allow_unsafe_update()
+            .build(&PostgresBackend);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().sql.contains("WITH"));
+    }
+
+    /// 验证 CTE + 无 WHERE DELETE + allow_unsafe_delete 放行。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn cte_delete_without_where_with_allow_unsafe_succeeds() {
+        let cte = QueryBuilder::select(&["id"]).from("expired_sessions");
+        let result = QueryBuilder::delete_from("sessions")
+            .with_cte("expired", cte)
+            .allow_unsafe_delete()
+            .build(&PostgresBackend);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().sql.contains("WITH"));
+    }
+
+    /// 验证 CTE + 有 WHERE UPDATE 正常（不触发安全校验）。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn cte_update_with_where_succeeds() {
+        let cte = QueryBuilder::select(&["id"])
+            .from("temp_users")
+            .and_where("batch")
+            .eq(1);
+        let inner = QueryBuilder::select(&["id"]).from_cte_ref("tmp");
+        let result = QueryBuilder::update("users")
+            .with_cte("tmp", cte)
+            .update_set("status", "active")
+            .and_where("id")
+            .in_subquery(inner)
+            .build(&PostgresBackend);
+
+        let qr = result.expect("with_cte + WHERE should not trigger safety check");
+        assert!(qr.sql.contains("WITH"));
+        assert!(qr.sql.contains("WHERE"));
+    }
+
+    // ============================================================
+    // Phase 4 — MSSQL ORDER BY 校验
+    // ============================================================
+
+    /// 验证 MSSQL OFFSET 无 ORDER BY 返回 OrderByRequired。
+    #[cfg(feature = "mssql")]
+    #[test]
+    fn mssql_offset_without_order_by_returns_error() {
+        use crate::backends::mssql::MssqlBackend;
+
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .limit(10)
+            .build(&MssqlBackend);
+
+        assert!(matches!(result, Err(BuildError::OrderByRequired)));
+    }
+
+    /// 验证 MSSQL OFFSET 有 ORDER BY 正常。
+    #[cfg(feature = "mssql")]
+    #[test]
+    fn mssql_offset_with_order_by_succeeds() {
+        use crate::backends::mssql::MssqlBackend;
+
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .order_by("id", SortDir::Asc)
+            .limit(10)
+            .build(&MssqlBackend);
+
+        assert!(result.is_ok());
+    }
+
+    /// 验证 MSSQL 无 LIMIT/OFFSET 时不需要 ORDER BY。
+    #[cfg(feature = "mssql")]
+    #[test]
+    fn mssql_without_offset_does_not_require_order_by() {
+        use crate::backends::mssql::MssqlBackend;
+
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .build(&MssqlBackend);
+
+        assert!(result.is_ok());
+    }
+
+    /// 验证 Postgres OFFSET 无需 ORDER BY（回归测试）。
+    #[cfg(feature = "postgresql")]
+    #[test]
+    fn postgres_offset_without_order_by_succeeds() {
+        let result = QueryBuilder::select(&["id"])
+            .from("users")
+            .limit(10)
+            .offset(5)
+            .build(&PostgresBackend);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().sql.contains("LIMIT"));
     }
 }
